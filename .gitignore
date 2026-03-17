@@ -1,6 +1,8 @@
 /Scenario_Logs/
 /ros-bridge/
 /CARLA_Leaderboard_20/
+/carla/
+/simulation_results.json
 /.idea/leaderboard2_human_data.iml
 /.idea/modules.xml
 /.idea/vcs.xml
