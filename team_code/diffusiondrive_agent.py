@@ -43,6 +43,8 @@ def strtobool(v):
 class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
     """DiffusionDrive agent for CARLA leaderboard."""
 
+    _CHECKPOINT_WRAPPER_PREFIXES = ("agent", "model", "module", "_transfuser_model")
+
     def setup(self, path_to_conf_file, route_index=None, traffic_manager=None):  # pylint: disable=unused-argument
         torch.cuda.empty_cache()
         self.track = autonomous_agent.Track.MAP if os.environ.get(
@@ -132,27 +134,90 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         else:
             checkpoint = torch.load(ckpt_path, map_location=torch.device("cpu"))
 
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-        else:
-            state_dict = checkpoint
+        state_dict, source_name = self._extract_checkpoint_state_dict(checkpoint)
+        filtered_state_dict, load_summary = self._align_checkpoint_state_dict(state_dict)
+        self.model.load_state_dict(filtered_state_dict, strict=False)
 
-        # Strip common prefixes
-        cleaned = {}
-        for k, v in state_dict.items():
-            if k.startswith("agent."):
-                k = k.replace("agent.", "", 1)
-            if k.startswith("model."):
-                k = k.replace("model.", "", 1)
-            if k.startswith("module."):
-                k = k.replace("module.", "", 1)
-            cleaned[k] = v
+        print(
+            "Loaded DiffusionDrive checkpoint from "
+            f"'{source_name}': matched {load_summary['loaded_count']}/{load_summary['model_key_count']} model tensors."
+        )
+        if load_summary["shape_mismatch"]:
+            print(
+                "Checkpoint tensors skipped due to shape mismatch "
+                f"({len(load_summary['shape_mismatch'])}): {load_summary['shape_mismatch'][:10]}"
+            )
+        if load_summary["unexpected_keys"]:
+            print(
+                "Checkpoint tensors skipped because no matching model key was found "
+                f"({len(load_summary['unexpected_keys'])}): {load_summary['unexpected_keys'][:10]}"
+            )
+        if load_summary["missing_keys"]:
+            print(
+                "Model tensors left uninitialized by checkpoint "
+                f"({len(load_summary['missing_keys'])}): {load_summary['missing_keys'][:10]}"
+            )
 
-        missing_keys, unexpected_keys = self.model.load_state_dict(cleaned, strict=False)
-        if missing_keys:
-            print(f"Missing keys when loading DiffusionDrive weights: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys when loading DiffusionDrive weights: {unexpected_keys}")
+    def _extract_checkpoint_state_dict(self, checkpoint):
+        if isinstance(checkpoint, dict):
+            for key in (
+                "state_dict",
+                "model_state_dict",
+                "model",
+                "ema_state_dict",
+                "network",
+                "net",
+                "weights",
+            ):
+                value = checkpoint.get(key)
+                if isinstance(value, dict):
+                    return value, key
+
+            if checkpoint and all(hasattr(value, "shape") for value in checkpoint.values()):
+                return checkpoint, "root"
+
+        raise RuntimeError("Unable to locate a tensor state_dict inside the provided checkpoint.")
+
+    def _normalize_checkpoint_key(self, key: str) -> str:
+        parts = key.split(".")
+        while parts and parts[0] in self._CHECKPOINT_WRAPPER_PREFIXES:
+            parts = parts[1:]
+        return ".".join(parts)
+
+    def _align_checkpoint_state_dict(self, state_dict):
+        model_state_dict = self.model.state_dict()
+        normalized_state_dict = {}
+
+        for key, value in state_dict.items():
+            normalized_key = self._normalize_checkpoint_key(key)
+            if normalized_key not in normalized_state_dict:
+                normalized_state_dict[normalized_key] = value
+
+        filtered_state_dict = {}
+        shape_mismatch = []
+        unexpected_keys = []
+
+        for key, value in normalized_state_dict.items():
+            if key not in model_state_dict:
+                unexpected_keys.append(key)
+                continue
+            if tuple(value.shape) != tuple(model_state_dict[key].shape):
+                shape_mismatch.append(
+                    f"{key}: ckpt{tuple(value.shape)} != model{tuple(model_state_dict[key].shape)}"
+                )
+                continue
+            filtered_state_dict[key] = value
+
+        missing_keys = sorted(set(model_state_dict.keys()) - set(filtered_state_dict.keys()))
+
+        load_summary = {
+            "loaded_count": len(filtered_state_dict),
+            "model_key_count": len(model_state_dict),
+            "missing_keys": missing_keys,
+            "unexpected_keys": sorted(unexpected_keys),
+            "shape_mismatch": sorted(shape_mismatch),
+        }
+        return filtered_state_dict, load_summary
 
     def _init(self):
         try:
