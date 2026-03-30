@@ -2,8 +2,62 @@
 
 本文档记录通过对比 `diffusiondrive_agent.py` 和 `sensor_agent.py` 以及原始 DiffusionDrive 代码发现的关键问题。
 
-**分析日期**: 2026-03-28
+**分析日期**: 2026-03-30
 **分析范围**: 运行时逻辑、架构设计、与 CARLA 其他 agent 的对比
+
+---
+
+## TODO List
+
+### P0 级别（必须修复才能正常运行）
+
+- [x] **LiDAR 半帧拼接逻辑** - 已完成 (2026-03-30)
+  - [x] 添加 `lidar_buffer` 和 `lidar_last`
+  - [x] 实现 `align_lidar()` 方法
+  - [x] 实现半帧拼接和完整扫描生成
+  - [x] 添加初始化等待逻辑
+
+- [x] **LiDAR 多帧缓冲和时序重对齐** - 已完成 (2026-03-30)
+  - [x] 实现 LiDAR buffer 填充逻辑
+  - [x] 实现多帧索引计算
+  - [x] 实现历史帧时序重对齐
+  - [x] 支持 `realign_lidar` 配置
+
+- [ ] **Config 参数整合**
+  - [ ] 统一 `GlobalConfig` 和 `DiffusionDriveConfig`
+  - [ ] 或让 `DiffusionDriveConfig` 继承 `GlobalConfig`
+
+### P1 级别（影响性能和稳定性）
+
+- [ ] **Stuck Detection**
+  - [ ] 添加 `stuck_detector` 计数器
+  - [ ] 实现 `force_move` 机制
+  - [ ] 添加 `creep_throttle` 控制
+
+- [ ] **Safety Box**
+  - [ ] 实现前方障碍物检测
+  - [ ] 添加 emergency stop 逻辑
+  - [ ] 配置 safety box 边界参数
+
+- [ ] **LiDAR 坐标系验证**
+  - [ ] 验证 `lidar_to_ego_coordinate()` 和 `align_lidar()` 一致性
+  - [ ] 确认 BEV 特征对齐正确
+
+### P2 级别（增强功能）
+
+- [ ] **Stop Sign Controller**
+  - [ ] 添加 stop sign buffer
+  - [ ] 实现停止标志检测逻辑
+  - [ ] 添加 `update_stop_box()` 方法
+
+- [ ] **Model Ensemble**
+  - [ ] 支持加载多个模型文件
+  - [ ] 实现 ensemble 推理
+  - [ ] 添加 NMS 后处理
+
+- [ ] **Config 重构**
+  - [ ] 统一配置管理
+  - [ ] 减少手动参数同步
 
 ---
 
