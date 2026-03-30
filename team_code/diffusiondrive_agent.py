@@ -128,6 +128,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.commands.append(4)
         self.target_point_prev = [1e5, 1e5, 1e5]
 
+        # Temporal LiDAR buffer for multi-frame processing
+        self.lidar_buffer = deque(maxlen=self.config.lidar_seq_len * self.config.data_save_freq)
+        self.lidar_last = None
+
     def _load_checkpoint(self, ckpt_path: str) -> None:
         if torch.cuda.is_available():
             checkpoint = torch.load(ckpt_path)
@@ -423,6 +427,18 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         return steer, throttle, brake
 
+    def align_lidar(self, lidar, x, y, orientation, x_target, y_target, orientation_target):
+        """Align LiDAR from one coordinate frame to another."""
+        pos_diff = np.array([x_target, y_target, 0.0]) - np.array([x, y, 0.0])
+        rot_diff = t_u.normalize_angle(orientation_target - orientation)
+
+        rotation_matrix = np.array([[np.cos(orientation_target), -np.sin(orientation_target), 0.0],
+                                    [np.sin(orientation_target), np.cos(orientation_target), 0.0],
+                                    [0.0, 0.0, 1.0]])
+        pos_diff = rotation_matrix.T @ pos_diff
+
+        return t_u.algin_lidar(lidar, pos_diff, rot_diff)
+
     @torch.inference_mode()
     def run_step(self, input_data, timestamp, sensors=None):  # pylint: disable=unused-argument
         self.step += 1
@@ -431,16 +447,65 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             self._init()
             control = carla.VehicleControl(steer=0.0, throttle=0.0, brake=1.0)
             self.control = control
-            self.tick(input_data)
+            tick_data = self.tick(input_data)
+            self.lidar_last = deepcopy(tick_data['lidar'])
             return control
 
         tick_data = self.tick(input_data)
 
-        # Prepare LiDAR BEV
-        lidar_histogram = self.data.lidar_to_histogram_features(
-            tick_data['lidar'],
-            use_ground_plane=self.config.use_ground_plane)
-        lidar_bev = torch.from_numpy(lidar_histogram).unsqueeze(0).to(self.device, dtype=torch.float32)
+        # Get current ego state
+        ego_x = self.state_log[-1][0]
+        ego_y = self.state_log[-1][1]
+        ego_theta = self.state_log[-1][2]
+
+        ego_x_last = self.state_log[-2][0]
+        ego_y_last = self.state_log[-2][1]
+        ego_theta_last = self.state_log[-2][2]
+
+        # Align last half LiDAR scan to current frame
+        lidar_last = self.align_lidar(self.lidar_last, ego_x_last, ego_y_last, ego_theta_last,
+                                       ego_x, ego_y, ego_theta)
+
+        # Concatenate current and last half scans to form full scan
+        lidar_current = deepcopy(tick_data['lidar'])
+        lidar_full = np.concatenate((lidar_current, lidar_last), axis=0)
+
+        self.lidar_buffer.append(lidar_full)
+
+        # Wait until buffer is filled
+        if len(self.lidar_buffer) < (self.config.lidar_seq_len * self.config.data_save_freq):
+            self.lidar_last = deepcopy(tick_data['lidar'])
+            tmp_control = carla.VehicleControl(0.0, 0.0, 1.0)
+            self.control = tmp_control
+            return tmp_control
+
+        # Prepare LiDAR indices for temporal sequence
+        lidar_indices = []
+        for i in range(self.config.lidar_seq_len):
+            lidar_indices.append(i * self.config.data_save_freq)
+
+        # Voxelize LiDAR and stack temporal frames
+        lidar_bev = []
+        for i in lidar_indices:
+            lidar_point_cloud = deepcopy(self.lidar_buffer[-(i + 1)])
+
+            # Realign historical LiDAR to current frame
+            if self.config.realign_lidar and self.config.lidar_seq_len > 1:
+                curr_x = self.state_log[-(i + 1)][0]
+                curr_y = self.state_log[-(i + 1)][1]
+                curr_theta = self.state_log[-(i + 1)][2]
+
+                lidar_point_cloud = self.align_lidar(lidar_point_cloud, curr_x, curr_y, curr_theta,
+                                                     ego_x, ego_y, ego_theta)
+
+            lidar_histogram = self.data.lidar_to_histogram_features(lidar_point_cloud,
+                                                                    use_ground_plane=self.config.use_ground_plane)
+            lidar_histogram = torch.from_numpy(lidar_histogram).unsqueeze(0).to(self.device, dtype=torch.float32)
+            lidar_bev.append(lidar_histogram)
+
+        lidar_bev = torch.cat(lidar_bev, dim=1)
+
+        self.lidar_last = deepcopy(tick_data['lidar'])
 
         # Prepare camera (normalize to 0-1 and resize to model input)
         rgb = tick_data['rgb'] / 255.0
