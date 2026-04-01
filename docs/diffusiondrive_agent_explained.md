@@ -1,10 +1,10 @@
 # `diffusiondrive_agent.py` 说明
 
-本文档解释 [`diffusiondrive_agent.py`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py) 的职责、执行流程、关键数据结构，以及它和 `sensor_agent.py` 的关系。
+本文档解释 `carla_garage/team_code/diffusiondrive_agent.py` 的职责、执行流程、关键数据结构，以及它和 `sensor_agent.py` 的关系。
 
 ## 1. 这个 agent 在做什么
 
-`DiffusionDriveAgent` 是一个给 CARLA leaderboard 用的推理 agent。它的工作可以概括成一条链路：
+`DiffusionDriveAgent` 是一个给 CARLA leaderboard 用的推理 agent。当前链路可以概括为：
 
 1. 从 CARLA 读取前视相机、LiDAR、IMU、GNSS、速度计数据。
 2. 用 `RoutePlanner` 和 UKF 估计车辆当前状态，并生成导航指令。
@@ -26,23 +26,13 @@
 
 文件中的 `get_entry_point()` 返回 `DiffusionDriveAgent`，这是 leaderboard 加载 agent 的入口。
 
-位置：
-
-- [`diffusiondrive_agent.py:35`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L35)
-
 ### 2.2 `setup()`
 
-`setup()` 负责完成一次评测 route 前的初始化。
-
-位置：
-
-- [`diffusiondrive_agent.py:46`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L46)
-
-它主要做了几件事：
+`setup()` 负责完成一次评测 route 前的初始化。主要工作包括：
 
 - 创建 CARLA 侧配置 `GlobalConfig`
 - 创建 DiffusionDrive 侧配置 `DiffusionDriveConfig`
-- 把 CARLA 的 LiDAR 边界、分辨率等参数同步到 `dd_config`
+- 把 CARLA 的 LiDAR 边界、分辨率、`lidar_seq_len`、`use_ground_plane` 等参数同步到 `dd_config`
 - 从环境变量读取：
   - `DIFFUSIONDRIVE_ANCHOR_PATH`
   - `DIFFUSIONDRIVE_CHECKPOINT`
@@ -50,43 +40,32 @@
 - 实例化 `V2TransfuserModel`
 - 加载 checkpoint
 - 初始化 PID 控制器
-- 初始化 UKF 和状态缓存
+- 初始化 UKF、状态缓存、LiDAR buffer
 
 ### 2.3 `run_step()`
 
-`run_step()` 是每个仿真 step 调用一次的主循环。
-
-位置：
-
-- [`diffusiondrive_agent.py:362`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L362)
-
-主流程如下：
+`run_step()` 是每个仿真 step 调用一次的主循环。当前主流程是：
 
 1. 第一次进入时调用 `_init()` 建立 route planner，并返回刹车控制。
 2. 后续每一步先调用 `tick()` 处理原始传感器。
-3. 把 LiDAR 转成 histogram BEV。
-4. 把图像归一化到 `[0,1]` 并 resize 到 DiffusionDrive 配置尺寸。
-5. 通过 `_build_status()` 生成状态向量。
-6. 调用模型预测轨迹。
-7. 提取 `(x, y)` waypoints，并通过 `_control_pid()` 生成控制量。
+3. 将上一帧半帧 LiDAR 对齐到当前车体坐标系。
+4. 将当前半帧与上一半帧拼接成完整扫描，并写入 `lidar_buffer`。
+5. 在 buffer 未填满时持续刹车等待。
+6. 从 buffer 中取出单帧或多帧 LiDAR，必要时将历史帧 realign 到当前坐标系。
+7. 把图像归一化到 `[0,1]` 并 resize 到 DiffusionDrive 配置尺寸。
+8. 通过 `_build_status()` 生成状态向量。
+9. 调用模型预测轨迹。
+10. 提取 `(x, y)` waypoints，并通过 `_control_pid()` 生成控制量。
 
 ### 2.4 `destroy()`
 
 `destroy()` 用于 route 结束后的清理。
-
-位置：
-
-- [`diffusiondrive_agent.py:405`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L405)
 
 这里专门覆写了 `destroy(self, results=None)`，原因是本地 evaluator 会调用 `destroy(results)`；如果不覆写，Python 会落到基类 `AutonomousAgent.destroy(self)`，导致参数不匹配报错。
 
 ## 3. 关键函数解释
 
 ### 3.1 `_load_checkpoint()`
-
-位置：
-
-- [`diffusiondrive_agent.py:129`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L129)
 
 作用：
 
@@ -95,15 +74,11 @@
   - `agent.`
   - `model.`
   - `module.`
-- 用 `strict=False` 加载，便于移植初期做权重对齐
-
-如果你后续要严格检查模型结构一致性，这里可以改成 `strict=True`，或者显式打印并处理 key mapping。
+  - `_transfuser_model.`
+- 只加载 key 和 shape 都匹配的参数
+- 打印 missing / unexpected / shape mismatch 摘要，方便权重对齐
 
 ### 3.2 `_init()`
-
-位置：
-
-- [`diffusiondrive_agent.py:157`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L157)
 
 作用：
 
@@ -115,11 +90,7 @@
 
 ### 3.3 `sensors()`
 
-位置：
-
-- [`diffusiondrive_agent.py:191`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L191)
-
-声明了 agent 需要的传感器：
+当前注册的传感器有：
 
 - 前视 RGB 相机 `rgb_front`
 - `imu`
@@ -127,13 +98,9 @@
 - `speed`
 - `lidar`
 
-这里没有像原始 `sensor_agent` 那样支持更多相机，也没有启用额外 debug sensor。
+这里没有像 navsim 原版那样拼接多相机，也没有像 `sensor_agent.py` 那样开启额外 debug sensor。
 
 ### 3.4 `tick()`
-
-位置：
-
-- [`diffusiondrive_agent.py:243`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L243)
 
 这是输入预处理的核心。
 
@@ -141,10 +108,10 @@
 
 - 图像处理：
   - 读取 `rgb_front`
-  - 人为做一次 jpeg encode/decode，尽量贴近训练时的数据分布
+  - 做一次 jpeg encode/decode，尽量贴近训练时的数据分布
   - BGR -> RGB
   - 调用 `t_u.crop_array()` 裁剪
-  - 转成 `C,H,W` 的 tensor
+  - 转成 `C,H,W` tensor
 - LiDAR 处理：
   - 用 `t_u.lidar_to_ego_coordinate()` 把点云转换到 ego 坐标系
 - 状态估计：
@@ -157,13 +124,9 @@
 
 注意：
 
-- 当前命令缓存使用 `self.commands[-2]`，这和 `sensor_agent` 的处理保持一致，用来减小指令抖动。
+- 当前命令缓存使用 `self.commands[-2]`，这和 `sensor_agent.py` 的处理保持一致，用来减小指令抖动。
 
 ### 3.5 `_build_status()`
-
-位置：
-
-- [`diffusiondrive_agent.py:308`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L308)
 
 这个函数把 CARLA 当前状态拼成 DiffusionDrive 的 `status_feature`。
 
@@ -177,13 +140,9 @@
 
 - `accel = (speed - prev_speed) / dt`
 
-所以当前 `status_feature` 不是一个完整的 2D 动力学状态，而是一个“简化版状态输入”。
+这是一份面向当前 CARLA 推理链路的简化状态输入。后续如果在 CARLA 上重新训练，应以训练配置为准。
 
 ### 3.6 `_control_pid()`
-
-位置：
-
-- [`diffusiondrive_agent.py:321`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L321)
 
 这个函数把模型输出轨迹转成控制信号。
 
@@ -207,14 +166,9 @@
   - resize 到 `(dd_config.camera_height, dd_config.camera_width)`
 - `lidar_feature`
   - 来自 `CARLA_Data.lidar_to_histogram_features()`
+  - 可来自单帧或多帧 LiDAR buffer
 - `status_feature`
   - 来自 `_build_status()`
-
-对应位置：
-
-- [`diffusiondrive_agent.py:374`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L374)
-- [`diffusiondrive_agent.py:384`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L384)
-- [`diffusiondrive_agent.py:386`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L386)
 
 模型输出中，当前真正用于控制的只有：
 
@@ -224,14 +178,10 @@
 
 - `traj[:, :, :2]`
 
-位置：
-
-- [`diffusiondrive_agent.py:392`](/home/heavenlysu/sitp_workspace/carla_garage/team_code/diffusiondrive_agent.py#L392)
-
 这意味着：
 
 - 轨迹中的 heading 当前没有进入控制器
-- agent box / semantic 等头虽然模型可能会输出，但目前未被本 agent 使用
+- agent box / semantic 等头虽然模型会输出，但目前未被本 agent 使用
 
 ## 5. 与 `sensor_agent.py` 的关系
 
@@ -244,6 +194,7 @@
 - UKF 状态估计
 - command 缓存逻辑
 - waypoint PID 控制思路
+- LiDAR 半帧拼接、多帧 buffer 和 realign 的基本做法
 
 替换掉的部分：
 
@@ -263,13 +214,20 @@
 
 当前只注册了一个 `rgb_front`，没有拼接多相机视角。
 
-### 6.2 LiDAR 目前是单帧 histogram
+### 6.2 缺少安全与恢复逻辑
 
-当前实现没有把 `sensor_agent` 里的历史 LiDAR buffer、半帧对齐、realign 逻辑完整搬过来，因此多帧时序信息目前没有真正发挥出来。
+当前还没有迁入 `sensor_agent.py` 里的：
 
-### 6.3 `status_feature` 是简化版
+- stuck detection
+- creep / force move
+- safety box
+- stop sign controller
 
-横向速度和横向加速度目前直接填 `0`，这对模型是否足够，需要以后结合训练配置继续确认。
+所以当前版本更偏“先跑通模型链路”，而不是“补齐全部运行时保护”。
+
+### 6.3 双 config 仍然并存
+
+当前同时维护 `GlobalConfig` 和 `DiffusionDriveConfig` 两个配置对象，模型输入相关参数需要手动同步，维护成本偏高。
 
 ### 6.4 控制器仍然是 classic PID
 
@@ -279,9 +237,8 @@ DiffusionDrive 当前只负责轨迹生成，真正执行层仍是 garage 原有
 
 如果后面要继续迭代这个 agent，优先关注这几块：
 
-1. 多帧 LiDAR 与时序对齐
-2. `status_feature` 的定义是否与训练侧完全一致
-3. 图像归一化是否需要 mean/std normalization
-4. 是否要利用模型的 heading / 检测 / 语义输出
-5. 是否要把 PID 控制替换成更贴合 DiffusionDrive 设定的执行器
-
+1. stuck detection / safety box / stop sign 等运行时保护逻辑
+2. 图像归一化是否需要更严格对齐训练侧
+3. 是否要利用模型的 heading / 检测 / 语义输出
+4. 是否要把 PID 控制替换成更贴合 DiffusionDrive 设定的执行器
+5. 是否要收敛成单一配置体系

@@ -1,8 +1,8 @@
 # DiffusionDrive CARLA 运行方法（Leaderboard）
 
-本文档说明如何在 `carla_garage` 中使用 `DiffusionDriveAgent` 进行评测/调试。
+本文档说明如何在 `carla_garage` 中使用 `DiffusionDriveAgent` 进行评测或调试。
 
-> 注意：我只写了代码与运行说明；未在本环境实际运行验证。
+> 说明：本文档保留通用运行方法。与当前机器、集群、路径强绑定的个人运行备忘仍放在 `docs/run.md`，该文件不在这里重复。
 
 ## 1. Agent 入口
 
@@ -13,14 +13,16 @@
 
 在运行 evaluator 前设置以下环境变量：
 
-- `DIFFUSIONDRIVE_ANCHOR_PATH`（必须）：plan anchor `.npy`
-  - 推荐 `(20,8,2)`（只包含 `x,y`；heading 由网络预测）
-- `DIFFUSIONDRIVE_CHECKPOINT`（强烈建议）：DiffusionDrive 权重 `.pth/.ckpt`
-  - 支持常见前缀清理：`agent.` / `model.` / `module.`
-- `DIFFUSIONDRIVE_BACKBONE_PATH`（可选）：timm backbone 权重
-  - 不设时会尝试使用工作目录下的 `pytorch_model.bin`（如果存在）
+- `DIFFUSIONDRIVE_ANCHOR_PATH`（必须）
+  - plan anchor `.npy`
+  - 当前推荐形状：`(20, 8, 2)`
+- `DIFFUSIONDRIVE_CHECKPOINT`（可选，但通常建议提供）
+  - DiffusionDrive 权重 `.pth/.ckpt`
+- `DIFFUSIONDRIVE_BACKBONE_PATH`（可选）
+  - timm backbone 权重
+  - 不设置时，agent 会尝试读取当前工作目录下的 `pytorch_model.bin`
 
-示例：
+最小示例：
 
 ```bash
 export DIFFUSIONDRIVE_ANCHOR_PATH=/abs/path/to/anchor.npy
@@ -28,20 +30,16 @@ export DIFFUSIONDRIVE_CHECKPOINT=/abs/path/to/diffusiondrive.ckpt
 export DIFFUSIONDRIVE_BACKBONE_PATH=/abs/path/to/pytorch_model.bin
 ```
 
-export DIFFUSIONDRIVE_ANCHOR_PATH=/home/sulawesi/sitp_workspace/plan_anchor.npy
-export DIFFUSIONDRIVE_CHECKPOINT=/home/sulawesi/sitp_workspace/diffusiondrive_navsim_88p1_PDMS
-export DIFFUSIONDRIVE_BACKBONE_PATH=/home/sulawesi/sitp_workspace/pytorch_model.bin
+运行 evaluator 前，还需要按 `carla_garage` 的常规方式配置：
 
-export CARLA_ROOT=/home/sulawesi/sitp_workspace/carla_garage/carla
-export WORK_DIR=/home/sulawesi/sitp_workspace/carla_garage
-export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI/carla
-export SCENARIO_RUNNER_ROOT=${WORK_DIR}/scenario_runner
-export LEADERBOARD_ROOT=${WORK_DIR}/leaderboard
-export PYTHONPATH="${CARLA_ROOT}/PythonAPI/carla/":"${SCENARIO_RUNNER_ROOT}":"${LEADERBOARD_ROOT}":${PYTHONPATH}
+- `CARLA_ROOT`
+- `SCENARIO_RUNNER_ROOT`
+- `LEADERBOARD_ROOT`
+- `PYTHONPATH`
+
+这些环境变量的机器相关写法请参考 `docs/run.md`。
 
 ## 3. 运行（本地 evaluator）
-
-`carla_garage` 自带 leaderboard，本地跑通常用 local evaluator（与仓库内 `README.md` 的用法一致）。
 
 常见做法是把 `--agent` 指向本 agent 文件：
 
@@ -51,12 +49,13 @@ python leaderboard/leaderboard/leaderboard_evaluator_local.py \
   --track SENSORS
 ```
 
+如果需要指定 routes：
+
 ```bash
-python3 /home/sulawesi/sitp_workspace/carla_garage/leaderboard/leaderboard/leaderboard_evaluator_local.py \
+python leaderboard/leaderboard/leaderboard_evaluator_local.py \
   --agent team_code/diffusiondrive_agent.py \
   --track SENSORS \
-  --routes /home/sulawesi/sitp_workspace/carla_garage/leaderboard/data/debug.xml \
-  
+  --routes /abs/path/to/routes.xml
 ```
 
 如果你跑 MAP track：
@@ -69,8 +68,8 @@ python leaderboard/leaderboard/leaderboard_evaluator_local.py \
 
 说明：
 
-- 具体还需要你按 `carla_garage` 的 leaderboard 配置补齐 routes / repetitions / port 等参数。
-- 如果你已经有自己的运行脚本（例如 slurm 脚本或 evaluate 脚本），只需要替换 agent 路径即可。
+- 具体还需要你按 `carla_garage` 的 leaderboard 配置补齐 `routes`、`repetitions`、`port`、`checkpoint` 等参数。
+- 如果你已经有自己的运行脚本，只需要替换 `--agent` 路径即可。
 
 ## 4. 运行（标准 evaluator）
 
@@ -85,15 +84,24 @@ python leaderboard/leaderboard/leaderboard_evaluator.py \
 
 ### A) 启动即报 anchor 相关错误
 
-`DIFFUSIONDRIVE_ANCHOR_PATH` 未设置会直接报错；另外请确认 `.npy` 形状与配置一致（默认按 `(20,8,2)` 读取）。
+`DIFFUSIONDRIVE_ANCHOR_PATH` 未设置会直接报错；另外请确认 `.npy` 形状与当前模型假设一致。
 
-### B) 权重加载后 missing/unexpected keys 很多
+### B) 权重加载后 missing / unexpected / shape mismatch 较多
 
-这是预期的“早期移植状态”。建议你：
+先确认三件事：
 
-1) 确认 checkpoint 对应的网络结构是否与当前 `V2TransfuserModel` 一致
-2) 观察打印的 missing/unexpected keys，做 key mapping 或修改模块命名
+1. checkpoint 对应的网络结构是否与当前 `V2TransfuserModel` 一致
+2. checkpoint 是否带有包装前缀，例如 `agent.` / `model.` / `module.` / `_transfuser_model.`
+3. 当前权重是否本来就不是按 CARLA 侧输入定义训练出来的
 
-### C) 依赖缺失
+当前 agent 会打印加载摘要，优先以摘要为准，不要只看是否“加载成功”。
 
-DiffusionDrive 模块会依赖一些 python 包（如 `diffusers`, `timm`, `einops` 等）。如果环境缺包，需要在你的运行环境里安装。
+### C) 缺少依赖
+
+DiffusionDrive 模块会依赖一些 Python 包，例如：
+
+- `diffusers`
+- `timm`
+- `einops`
+
+如果环境缺包，需要在运行环境里补齐。

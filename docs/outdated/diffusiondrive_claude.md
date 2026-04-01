@@ -1,5 +1,21 @@
 # DiffusionDrive CARLA 移植问题分析
 
+本文档是 2026-03-30 对 `diffusiondrive_agent.py` 的阶段性问题分析快照。
+
+说明：
+
+- 该文档中的部分结论已经被后续代码修正
+- 尤其是 LiDAR 半帧拼接、多帧 buffer、初始化等待等问题，当前代码已不再符合本文档描述
+- 阅读时请优先参考当前文档：
+  - `docs/dd_todo.md`
+  - `docs/diffusiondrive_agent_explained.md`
+
+原文保留如下，供历史回溯使用。
+
+---
+
+# DiffusionDrive CARLA 移植问题分析
+
 本文档记录通过对比 `diffusiondrive_agent.py` 和 `sensor_agent.py` 以及原始 DiffusionDrive 代码发现的关键问题。
 
 **分析日期**: 2026-03-30
