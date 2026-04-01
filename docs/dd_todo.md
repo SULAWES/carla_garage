@@ -26,15 +26,15 @@
   - [x] 实现历史帧时序重对齐
   - [x] 支持 `realign_lidar` 配置
 
-- [ ] **Stuck Detection**
-  - [ ] 添加 `stuck_detector` 计数器
-  - [ ] 实现 `force_move` / creep 机制
-  - [ ] 接入 `creep_throttle`
+- [x] **Stuck Detection** - 已完成
+  - [x] 添加 `stuck_detector` 计数器
+  - [x] 实现 `force_move` / creep 机制
+  - [x] 接入 `creep_throttle`
 
-- [ ] **Safety Box**
-  - [ ] 实现前方 LiDAR 安全框过滤
-  - [ ] 添加 emergency stop 逻辑
-  - [ ] 接入 `safety_box_*` 配置
+- [x] **Safety Box** - 已完成
+  - [x] 实现前方 LiDAR 安全框过滤
+  - [x] 添加 emergency stop 逻辑
+  - [x] 接入 `safety_box_*` 配置
 
 ### P1 级别（影响性能与可维护性）
 
@@ -122,23 +122,31 @@
 
 ---
 
-## P0 级别问题（优先补齐）
+## P0 级别事项（已完成后的验证与调参）
 
-### 1. 缺少 Stuck Detection 和 Safety Box ⚠️
+### 1. Stuck Detection 和 Safety Box 已接入，后续重点是调参与验证
 
-**问题描述**：
+**当前状态**：
 
-当前 `DiffusionDriveAgent` 还没有迁入 `sensor_agent.py` 中的 stuck detection、creep 和 safety box 逻辑。
+`DiffusionDriveAgent` 已经接入：
 
-**当前影响**：
+- stuck detection
+- `force_move` / creep
+- safety box
 
-- 车辆卡住时缺少自动恢复机制
-- 更容易触发 `AgentBlockedTest`
-- 即使后续加入 creep，如果没有 safety box，也缺少前方障碍物保护
+因此，这一项已经不再属于“缺失功能”，而是进入“效果验证与参数调优”阶段。
 
-**结论**：
+**当前关注点**：
 
-这一项比模型结构问题更优先，因为它直接影响 route 能否稳定跑完。
+- `safety_box_*` 阈值是否过紧或过松
+- `stuck_threshold` / `creep_duration` 是否适合当前 route 分布
+- creep 是否会在跟车、红灯起步或贴近障碍物时误触发
+
+**建议**：
+
+- 用简单 route 先做闭环验证
+- 单独记录 creep 触发次数和 emergency stop 次数
+- 根据实测结果微调 `safety_box_*`、`stuck_threshold`、`creep_duration`
 
 ---
 

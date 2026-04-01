@@ -123,6 +123,8 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.state_log = deque(maxlen=max((self.config.lidar_seq_len * self.config.data_save_freq), 2))
 
         self.prev_speed = None
+        self.stuck_detector = 0
+        self.force_move = 0
         self.commands = deque(maxlen=2)
         self.commands.append(4)
         self.commands.append(4)
@@ -522,7 +524,48 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         traj = outputs['trajectory']
         waypoints = traj[:, :, :2]
 
-        steer, throttle, brake = self._control_pid(waypoints, tick_data['speed'].item())
+        speed = tick_data['speed'].item()
+        steer, throttle, brake = self._control_pid(waypoints, speed)
+
+        # Restart mechanism in case the car got stuck.
+        if speed < 0.1:
+            self.stuck_detector += 1
+        else:
+            self.stuck_detector = 0
+
+        if self.stuck_detector > self.config.stuck_threshold:
+            self.force_move = self.config.creep_duration
+
+        if self.force_move > 0:
+            emergency_stop = False
+
+            # Match sensor_agent creep protection using the latest full LiDAR scan.
+            safety_box = deepcopy(self.lidar_buffer[-1])
+
+            # z-axis
+            safety_box = safety_box[safety_box[..., 2] > self.config.safety_box_z_min]
+            safety_box = safety_box[safety_box[..., 2] < self.config.safety_box_z_max]
+
+            # y-axis
+            safety_box = safety_box[safety_box[..., 1] > self.config.safety_box_y_min]
+            safety_box = safety_box[safety_box[..., 1] < self.config.safety_box_y_max]
+
+            # x-axis
+            safety_box = safety_box[safety_box[..., 0] > self.config.safety_box_x_min]
+            safety_box = safety_box[safety_box[..., 0] < self.config.safety_box_x_max]
+            emergency_stop = (len(safety_box) > 0)
+
+            if not emergency_stop:
+                print('Detected agent being stuck. Step: ', self.step)
+                throttle = max(self.config.creep_throttle, throttle)
+                brake = False
+                self.force_move -= 1
+            else:
+                print('Creeping stopped by safety box. Step: ', self.step)
+                throttle = 0.0
+                brake = True
+                self.force_move = self.config.creep_duration
+
         control = carla.VehicleControl(steer=float(steer), throttle=float(throttle), brake=float(brake))
 
         if self.step < self.config.inital_frames_delay:
