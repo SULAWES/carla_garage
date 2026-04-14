@@ -186,11 +186,14 @@
 - `safety_box_*` 阈值需要按新模型行为重新调
 - `stuck_threshold` / `creep_duration` 需要和模型停车/起步风格联调
 - 当前 creep / safety box 相关 `print` 适合调试，但长时间评测时可能日志过噪
+- 如果目标评测环境是 Bench2Drive，还要额外考虑 `AgentBlockedTest` 更早触发的问题
 
 **建议**：
 
 - 训练后单独做闭环调参阶段，不要把训练提升和阈值变化混在一起评估
 - 如需长时间批量评测，考虑将这类日志改为可配置 debug 开关或限频输出
+- 如果跑 Bench2Drive，优先确认 stuck recovery 的触发时机是否明显早于 blocked timeout
+- 不要直接沿用当前 `stuck_threshold = 1100` 的默认值去跑 Bench2Drive 闭环评测
 
 ---
 
