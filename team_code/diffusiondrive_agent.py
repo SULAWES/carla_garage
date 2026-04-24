@@ -29,6 +29,7 @@ import transfuser_utils as t_u
 
 from diffusiondrive.config import DiffusionDriveConfig
 from diffusiondrive.model import V2TransfuserModel
+from birds_eye_view.run_stop_sign import RunStopSign
 
 
 # Leaderboard function that selects the class used as agent.
@@ -125,6 +126,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.prev_speed = None
         self.stuck_detector = 0
         self.force_move = 0
+        self.stop_sign_controller = int(os.environ.get("STOP_CONTROL", 1))
+        print("Use stop sign controller:", self.stop_sign_controller)
+        self.stop_sign_criteria = None
+        self.hero_actor = None
+        self.waiting_ticks_at_stop_sign = 0
+        self.cleared_stop_sign = False
         self.commands = deque(maxlen=2)
         self.commands.append(4)
         self.commands.append(4)
@@ -257,6 +264,18 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                                            self.lat_ref,
                                            self.lon_ref)
         self._route_planner.set_route(self._global_plan, True)
+
+        if self.stop_sign_controller:
+            try:
+                from srunner.scenariomanager.carla_data_provider import CarlaDataProvider  # pylint: disable=import-outside-toplevel
+                self.hero_actor = CarlaDataProvider.get_hero_actor()
+                if self.hero_actor is not None:
+                    self.stop_sign_criteria = RunStopSign(self.hero_actor.get_world())
+            except Exception as exc:  # pylint: disable=broad-except
+                print(f"Failed to initialize stop sign controller: {exc}", flush=True)
+                self.stop_sign_criteria = None
+                self.hero_actor = None
+
         self.initialized = True
 
     def sensors(self):
@@ -429,6 +448,38 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         return steer, throttle, brake
 
+    def _stop_sign_controller_step(self, ego_speed: float) -> bool:
+        """Force a full stop when approaching a route-relevant stop sign."""
+        if not self.stop_sign_controller or self.stop_sign_criteria is None or self.hero_actor is None:
+            return False
+
+        self.stop_sign_criteria.tick(self.hero_actor)
+        stop_sign = self.stop_sign_criteria.target_stop_sign
+        if stop_sign is None:
+            self.waiting_ticks_at_stop_sign = 0
+            return False
+
+        ego_location = self.hero_actor.get_location()
+        stop_center = stop_sign.get_transform().transform(stop_sign.trigger_volume.location)
+        distance_to_stop_sign = stop_center.distance(ego_location)
+
+        if distance_to_stop_sign > self.config.unclearing_distance_to_stop_sign:
+            self.cleared_stop_sign = False
+            self.waiting_ticks_at_stop_sign = 0
+            return False
+
+        if ego_speed < 0.1 and distance_to_stop_sign < self.config.clearing_distance_to_stop_sign:
+            self.waiting_ticks_at_stop_sign += 1
+            if self.waiting_ticks_at_stop_sign > 25:
+                self.cleared_stop_sign = True
+        else:
+            self.waiting_ticks_at_stop_sign = 0
+
+        if self.cleared_stop_sign:
+            return False
+
+        return True
+
     def align_lidar(self, lidar, x, y, orientation, x_target, y_target, orientation_target):
         """Align LiDAR from one coordinate frame to another."""
         pos_diff = np.array([x_target, y_target, 0.0]) - np.array([x, y, 0.0])
@@ -526,6 +577,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         speed = tick_data['speed'].item()
         steer, throttle, brake = self._control_pid(waypoints, speed)
+        stop_for_stop_sign = self._stop_sign_controller_step(speed)
 
         # Restart mechanism in case the car got stuck.
         if speed < 0.1:
@@ -566,6 +618,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                 brake = True
                 self.force_move = self.config.creep_duration
 
+        if stop_for_stop_sign:
+            throttle = 0.0
+            brake = True
+
         control = carla.VehicleControl(steer=float(steer), throttle=float(throttle), brake=float(brake))
 
         if self.step < self.config.inital_frames_delay:
@@ -581,7 +637,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         AutonomousAgent only defines destroy(self). Override it here so cleanup
         works with both evaluator variants.
         """
-        for attr in ("model", "data", "config", "dd_config", "ukf"):
+        for attr in ("model", "data", "config", "dd_config", "ukf", "stop_sign_criteria", "hero_actor"):
             if hasattr(self, attr):
                 delattr(self, attr)
 

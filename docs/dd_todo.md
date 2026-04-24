@@ -41,15 +41,17 @@
 
 ### P1 级别（影响性能与可维护性）
 
-- [ ] **Stop Sign Controller**
-  - [ ] 添加 stop sign buffer
-  - [ ] 迁移停止标志检测逻辑
-  - [ ] 评估是否需要 `update_stop_box()`
+- [x] **Stop Sign Controller**
+  - [x] 接入基于 CARLA world stop sign actor 的运行时 stop sign controller
+  - [x] 不再依赖 `sensor_agent.py` 的 bbox stop sign 检测头
+  - [ ] 评估是否需要进一步迁移为 bbox / route-aware stop sign box 更新逻辑
 
 - [ ] **LiDAR / BEV 对齐验证**
-  - [ ] 验证 `lidar_to_ego_coordinate()` 与 `align_lidar()` 的组合是否一致
-  - [ ] 确认历史帧 realign 后的 BEV 对齐正确
-  - [ ] 必要时增加可视化或调试输出
+  - [x] 添加合成验证脚本 `tools/validate_lidar_bev_alignment.py`
+  - [x] 验证在线 `DiffusionDriveAgent.align_lidar()` 与离线 `CARLA_Data.align()` 当前实现一致
+  - [x] 验证 `DiffusionDriveAgent` 的负索引历史帧配对优于 `sensor_agent.py` 的旧正索引写法
+  - [ ] 进一步确认当前共享变换公式与标准 SE(2) 刚体变换的残余偏差是否来自 `pos_global/theta` 语义约定
+  - [ ] 必要时增加基于真实 route log 的可视化或调试输出
 
 - [ ] **Config 体系收敛**
   - [ ] 评估 `GlobalConfig` 与 `DiffusionDriveConfig` 的职责边界
