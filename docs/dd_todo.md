@@ -8,6 +8,9 @@
 - 当前代码状态以 `carla_garage/team_code/diffusiondrive_agent.py` 为准
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 暂不作为近期对齐项，因为后续计划在 CARLA 上重新训练
+- 需要区分两套机制：
+- `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
+- `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
 
 ---
 
@@ -62,6 +65,10 @@
   - [ ] 明确 CARLA 侧训练 / 推理统一使用 `8x2` 还是 `8x3(x, y, heading)` 轨迹表示
   - [ ] 核对 `plan_anchor`、`norm_odo()/denorm_odo()` 与最终 `trajectory` 输出的维度语义是否一致
   - [ ] 评估是否需要恢复 heading-aware 训练以减少当前“2D anchor + 3D 输出”的半对齐状态
+  - [ ] 处理新聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 的时序长度不匹配问题
+  - [ ] 当前新 anchor shape 为 `99x10x2`，现有运行链路使用的 anchor shape 为 `20x8x2`，不能直接替换
+  - [ ] 选择适配方案：将 `10` 个 pose 重采样 / 截断到 `8` 个 pose，或同步修改 `trajectory_sampling.num_poses`、模型轨迹头和控制链路以支持 `10` 个 pose
+  - [ ] 明确 `99` 个 mode 是否需要同步调整当前依赖 `20` 个 anchor mode 的模块与权重兼容性
 
 ### P2 级别（增强项）
 
@@ -179,6 +186,7 @@
 - 维护成本高
 - 参数容易遗漏
 - 后续训练和推理配置不易统一
+- `status_feature` 与 `extra_sensors` 的边界也需要一起固化，避免把当前 `DiffusionDriveAgent` 的状态输入和 garage 原模型的可选 `extra_sensors` 分支混为一谈
 
 **推荐方向**：
 
@@ -186,6 +194,7 @@
 - 保留 `DiffusionDriveConfig` 作为模型配置
 - 新增显式 builder / adapter，例如 `build_dd_config(global_config, overrides=None)`
 - 将当前 `setup()` 里的手动字段同步集中到一处维护
+- 在该 builder / adapter 中显式声明 `status_feature` 各子项维度，以及是否存在独立 `extra_sensors` 分支，避免后续 checkpoint、训练配置和推理侧对输入接口理解不一致
 
 **不推荐方案**：
 
@@ -213,23 +222,33 @@
 - 这些问题更偏性能和稳定性，而不是“能不能跑”
 - 如果后续准备在 CARLA 上重新训练，这些项应该尽早固化
 
+**补充说明**：
+
+- 当前 `DiffusionDriveAgent` 文档应继续按 `command(6) + velocity(2) + acceleration(2)` 描述 `status_feature`
+- `extra_sensors` 是 `carla_garage/team_code/model.py` 中的另一套可选输入机制：若开启，会将 `velocity(1)` 和 / 或 `discrete_command(6)` 拼接后送入 `extra_sensor_encoder`
+- 因此后续训练设计里需要明确：是只保留 `status_feature`，还是同时引入独立 `extra_sensors` 分支
+
 ### 5. 轨迹表示目前仍处于“部分改成 2D”状态
 
 **问题描述**：
 
 当前 CARLA 版为了适配现有 anchor，已经把 `plan_anchor` 相关处理改成了二维 `(x, y)` 假设；但模型解码输出和原版方法仍然保留了 `(x, y, heading)` 轨迹结构。
 
+另外，仓库中新提取出的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 当前为 `99x10x2`，与现有推理所用的 `20x8x2` anchor 设定不一致，因此目前只能作为候选输入，不能直接替换 `plan_anchor.npy`。
+
 **影响**：
 
 - 当前实现能跑，但轨迹表示在 anchor、归一化和最终输出之间不是完全统一的
 - 这会增加后续训练设计和调试成本
 - 如果未来希望引入更贴合轨迹朝向的控制或分析，这个不一致会变成阻碍
+- 新 anchor 若直接接入，会同时引入 mode 数和时序长度两处接口变化，影响模型结构、checkpoint 对齐和控制逻辑
 
 **推荐方向**：
 
 - 明确 CARLA 侧最终采用 `8x2` 还是 `8x3`
 - 训练与推理统一使用同一套轨迹表示
 - 如果准备在 CARLA 上系统训练，优先评估恢复 heading-aware 监督
+- 单独决定新 anchor 的接入策略：先做离线重采样得到 `20x8x2` 兼容版，或系统性升级为 `99x10x2`
 
 ---
 

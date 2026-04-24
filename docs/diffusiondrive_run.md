@@ -15,7 +15,10 @@
 
 - `DIFFUSIONDRIVE_ANCHOR_PATH`（必须）
   - plan anchor `.npy`
-  - 当前推荐形状：`(20, 8, 2)`
+  - 当前可直接运行的推荐形状：`(20, 8, 2)`
+  - 仓库中另有一份新提取的聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy`，shape 为 `99x10x2`
+  - 该文件来自 `99` 个聚类中心，每个 cluster 的 `mu` 是一条拉直后的 `10` 个 `(x, y)` 路点轨迹，也就是一个 `20D` 向量
+  - 由于当前 agent 默认链路仍按 `20x8x2` 组织，这份 `99x10x2` anchor 目前不能直接替换现有运行 anchor
 - `DIFFUSIONDRIVE_CHECKPOINT`（可选，但通常建议提供）
   - DiffusionDrive 权重 `.pth/.ckpt`
 - `DIFFUSIONDRIVE_BACKBONE_PATH`（可选）
@@ -85,6 +88,12 @@ python leaderboard/leaderboard/leaderboard_evaluator.py \
 ### A) 启动即报 anchor 相关错误
 
 `DIFFUSIONDRIVE_ANCHOR_PATH` 未设置会直接报错；另外请确认 `.npy` 形状与当前模型假设一致。
+
+特别注意：
+
+1. 当前默认可运行链路假设的是 `20x8x2`
+2. `4-0-0-1910-tracked_clusters_anchor.npy` 虽然格式正确，但它是 `99x10x2`
+3. 若直接把 `DIFFUSIONDRIVE_ANCHOR_PATH` 指向这份新文件，通常还需要同步处理 mode 数、时间步长度以及相关 checkpoint 兼容问题
 
 ### B) 权重加载后 missing / unexpected / shape mismatch 较多
 

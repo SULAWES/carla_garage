@@ -42,6 +42,13 @@
 - 初始化 PID 控制器
 - 初始化 UKF、状态缓存、LiDAR buffer
 
+补充说明：
+
+- 当前默认可运行的 anchor 仍是 `20x8x2` 这一组设定
+- 仓库中另有新提取的聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy`，shape 为 `99x10x2`
+- 这份新 anchor 来自 `99` 个 cluster，每个 cluster 的 `mu` 都是一条拉直后的 `10` 个 `(x, y)` 路点轨迹，即一个 `20D` 向量
+- 由于当前模型与控制链路仍按 `20x8x2` 组织，这份新 anchor 目前不能直接替换现有运行配置
+
 ### 2.3 `run_step()`
 
 `run_step()` 是每个仿真 step 调用一次的主循环。当前主流程是：
@@ -130,7 +137,7 @@
 
 这个函数把 CARLA 当前状态拼成 DiffusionDrive 的 `status_feature`。
 
-当前定义是：
+当前 `DiffusionDriveAgent` 的实现里，这个函数显式构造的是：
 
 - `command`: 6 维 one-hot
 - `velocity`: 2 维，实际填的是 `[speed, 0.0]`
@@ -140,7 +147,12 @@
 
 - `accel = (speed - prev_speed) / dt`
 
-这是一份面向当前 CARLA 推理链路的简化状态输入。后续如果在 CARLA 上重新训练，应以训练配置为准。
+需要注意不要把它和 `carla_garage/team_code/model.py` 中的 `extra_sensors` 机制混在一起：
+
+- `DiffusionDriveAgent` 当前走的是显式 `status_feature`
+- `extra_sensors` 是 garage 原模型里的另一套可选输入分支，会按配置拼接 `velocity(1)` 和 / 或 `discrete_command(6)`，再送入 `extra_sensor_encoder`
+
+这是一份面向当前 CARLA 推理链路的状态输入定义。后续如果在 CARLA 上重新训练，应由训练侧明确是否继续保留独立 `extra_sensors` 分支。
 
 ### 3.6 `_control_pid()`
 

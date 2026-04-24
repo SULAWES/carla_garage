@@ -8,6 +8,11 @@
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
 - 因此训练侧优先级高于继续对齐 navsim checkpoint 语义
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
+- 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
+- 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
+- `carla_garage/team_code/model.py` 中的 `extra_sensors` 是可选分支：按配置拼接 `velocity(1)` 与 / 或 `discrete_command(6)`，再经 `extra_sensor_encoder` 编码
+- 当前新提取的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 语义为 `99x10x2`
+- 其来源 JSON 中每个 cluster 的 `mu` 都是一条拉直后的 `10` 个路点 `(x, y)` 轨迹，即一个 `20D` 向量
 
 ---
 
@@ -20,11 +25,13 @@
   - [ ] 明确图像裁剪 / resize / normalize 方案
   - [ ] 明确 LiDAR 输入通道定义
   - [ ] 明确 `status_feature` 的最终定义
+  - [ ] 明确是否保留独立 `extra_sensors` 分支，以及其输入组成
 
 - [ ] **训练标签与轨迹定义冻结**
   - [ ] 明确未来轨迹采样方式
   - [ ] 明确 anchor 生成方式与数组形状
   - [ ] 明确 heading 是否仍由轨迹 head 预测
+  - [ ] 明确是否采用新聚类 anchor：`99` 个 mode，每个 mode 对应 `10x2` 轨迹点
 
 - [ ] **数据集生成规范**
   - [ ] 明确需要采哪些传感器
@@ -37,6 +44,7 @@
   - [ ] 明确 command 维度和语义
   - [ ] 明确 velocity / acceleration 的取值方式
   - [ ] 明确是否做归一化
+  - [ ] 明确 `status_feature` 和 `extra_sensors` 是否并存，还是合并为单一状态输入
 
 - [ ] **图像预处理方案验证**
   - [ ] 评估 JPEG artifact 是否需要保留
@@ -52,6 +60,7 @@
   - [ ] 明确最终采用 `8x2` 还是 `8x3(x, y, heading)` 轨迹表示
   - [ ] 训练与推理统一使用同一套 anchor / 归一化 / 输出语义
   - [ ] 如果保留 heading，明确监督与损失设计
+  - [ ] 若采用新聚类结果，明确 `99x10x2` 是否直接作为训练 anchor，还是先重采样 / 截断为兼容格式
 
 ### P2 级别（训练后闭环增强）
 
@@ -97,6 +106,22 @@
 
 这为后续训练时是否采用多帧 LiDAR，以及训练后如何做闭环调参，提供了直接参考。
 
+#### 3. 新聚类 anchor 已提取，但尚未接入当前链路
+
+当前仓库根目录下已存在：
+
+- `4-0-0-1910-tracked_clusters.json`
+- `4-0-0-1910-tracked_clusters_anchor.npy`
+
+其中：
+
+- cluster 数为 `99`
+- 每个 cluster 的 `mu` 长度为 `20`
+- 语义上等价于一条拉直后的 `10` 个路点 `(x, y)` 轨迹
+- 提取后的 anchor 文件 shape 为 `99x10x2`
+
+这说明新的聚类结果已经可供训练侧使用，但它与当前推理默认使用的 `20x8x2` anchor 仍不兼容，接入前必须先冻结训练方案。
+
 ---
 
 ## P0 级别问题（训练前必须明确）
@@ -114,6 +139,17 @@
 - velocity / acceleration 是否保留 2D
 - 是否加入更多状态量
 - 是否做归一化
+- 是否保留独立 `extra_sensors` 分支
+- 若保留，`extra_sensors` 中具体拼哪些量：`velocity(1)`、`discrete_command(6)`，还是别的输入
+
+**当前代码事实**：
+
+- `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
+- `carla_garage/team_code/model.py` 中的 `extra_sensors` 则是另一套可选输入分支：
+  - 若 `use_velocity=True`，加入 `velocity_normalization(ego_vel)`，贡献 `1` 维
+  - 若 `use_discrete_command=True`，加入 `command`，贡献 `6` 维
+  - 两者拼接后送入 `extra_sensor_encoder`
+- 因此这里真正需要冻结的是：训练侧到底采用哪一套输入接口，而不是把两者误写成固定的 `6+1`
 
 **结论**：
 
@@ -145,6 +181,7 @@
 - 相机布局
 - 轨迹标签定义
 - anchor 生成方式
+- 是否围绕新的 `99x10x2` 聚类 anchor 组织训练数据与标签
 
 ---
 
@@ -169,11 +206,16 @@
 
 当前实现里二维 anchor 与三维轨迹输出并存。对于继续训练来说，这种“部分 2D、部分 3D”的状态不适合长期保留。
 
+另外，新提取出的聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 目前是 `99x10x2`。它对应的原始 JSON 里，每个 cluster 的 `mu` 都是一条拉直后的 `10` 点轨迹，也就是一个 `20D` 向量；这与当前推理链路使用的 `20x8x2` anchor 在 mode 数和时间步长度上都不同。
+
 **需要明确**：
 
 - 训练目标到底是 2D 还是 3D 轨迹
 - anchor、归一化、loss、输出头是否完全一致
 - 控制器后续会不会利用 heading
+- 新聚类 anchor 是否直接作为正式训练 anchor
+- 如果采用新 anchor，`trajectory_sampling.num_poses`、loss、控制链路和 checkpoint 策略是否同步升级到 `99x10x2`
+- 如果不直接采用，是否先离线生成兼容版 anchor 再进入训练
 
 ### 6. 训练后闭环参数需要重新调
 
