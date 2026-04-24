@@ -7,10 +7,11 @@ directory containing:
   route_dir/
     lidar/0000.laz
     measurements/0000.json.gz
+    boxes/0000.json.gz
 
 and produces:
   - BEV overlays before/after alignment
-  - occupancy IoU metrics
+  - occupancy IoU metrics with dynamic actors masked out via boxes/*.json.gz
   - a JSON summary
 
 The alignment math mirrors the current implementation in:
@@ -18,13 +19,13 @@ The alignment math mirrors the current implementation in:
   - team_code/diffusiondrive_agent.py: DiffusionDriveAgent.align_lidar()
 
 Examples:
-  python tools/render_lidar_bev_alignment.py \
+  python tools/render_lidar_bev_alignment_v3.py \
     --route-dir data/.../SomeRoute \
     --frame 120 \
     --history 1 2 3 \
     --output-dir /tmp/lidar_bev_debug
 
-  python tools/render_lidar_bev_alignment.py \
+  python tools/render_lidar_bev_alignment_v3.py \
     --root-dir data/50x36_Town13 \
     --history 1 2 3 \
     --frames-per-route 2 \
@@ -37,6 +38,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,6 +127,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Render both below/above split channels instead of the default above-only channel.",
     )
+    parser.add_argument(
+        "--dynamic-classes",
+        nargs="+",
+        default=["car", "walker", "ego_car"],
+        help="Bounding-box classes to mask out before computing occupancy IoU.",
+    )
     args = parser.parse_args()
     if (args.route_dir is None) == (args.root_dir is None):
         parser.error("Specify exactly one of --route-dir or --root-dir.")
@@ -141,7 +149,20 @@ def normalize_angle(x: float) -> float:
 
 
 def load_lidar(lidar_path: Path) -> np.ndarray:
-    las = laspy.read(lidar_path)
+    try:
+        las = laspy.read(lidar_path)
+    except Exception as exc:
+        message = str(exc)
+        if "No LazBackend selected" in message:
+            raise RuntimeError(
+                "Failed to read compressed .laz LiDAR because laspy has no LAZ backend installed.\n"
+                "Install one of the following in the same Python environment and rerun:\n"
+                "  python -m pip install lazrs\n"
+                "or:\n"
+                "  python -m pip install \"laspy[lazrs]\"\n"
+                f"Problematic file: {lidar_path}"
+            ) from exc
+        raise
     return np.asarray(las.xyz, dtype=np.float32)
 
 
@@ -150,8 +171,12 @@ def load_measurement(measurement_path: Path) -> dict:
         return json.load(handle)
 
 
-def align_lidar(lidar_0: np.ndarray, measurement_0: dict, measurement_1: dict) -> np.ndarray:
-    """Mirror CARLA_Data.align() without augmentation."""
+def load_boxes(boxes_path: Path) -> list[dict]:
+    with gzip.open(boxes_path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def alignment_delta(measurement_0: dict, measurement_1: dict) -> tuple[np.ndarray, float]:
     pos_1 = np.array([measurement_1["pos_global"][0], measurement_1["pos_global"][1], 0.0], dtype=np.float32)
     pos_0 = np.array([measurement_0["pos_global"][0], measurement_0["pos_global"][1], 0.0], dtype=np.float32)
     pos_diff = pos_1 - pos_0
@@ -166,6 +191,12 @@ def align_lidar(lidar_0: np.ndarray, measurement_0: dict, measurement_1: dict) -
         dtype=np.float32,
     )
     pos_diff = rotation_matrix.T @ pos_diff
+    return pos_diff, rot_diff
+
+
+def align_lidar(lidar_0: np.ndarray, measurement_0: dict, measurement_1: dict) -> np.ndarray:
+    """Mirror CARLA_Data.align() without augmentation."""
+    pos_diff, rot_diff = alignment_delta(measurement_0, measurement_1)
     return algin_lidar(lidar_0, pos_diff, rot_diff)
 
 
@@ -220,6 +251,98 @@ def occupancy_iou(a: np.ndarray, b: np.ndarray) -> float:
     return float(inter / union)
 
 
+def box_to_mask(box: dict, shape: tuple[int, int], cfg: BevConfig) -> np.ndarray:
+    center_x = float(box["position"][0])
+    center_y = float(box["position"][1])
+    extent_x = float(box["extent"][0])
+    extent_y = float(box["extent"][1])
+    yaw = float(box["yaw"])
+
+    rotation_matrix = np.array(
+        [
+            [np.cos(yaw), -np.sin(yaw)],
+            [np.sin(yaw), np.cos(yaw)],
+        ],
+        dtype=np.float32,
+    )
+    corners = np.array(
+        [
+            [-extent_x, -extent_y],
+            [extent_x, -extent_y],
+            [extent_x, extent_y],
+            [-extent_x, extent_y],
+        ],
+        dtype=np.float32,
+    )
+    world_corners = (rotation_matrix @ corners.T).T + np.array([center_x, center_y], dtype=np.float32)
+
+    ppm = cfg.pixels_per_meter
+    col_min = max(int(np.floor((world_corners[:, 0].min() - cfg.min_x) * ppm)), 0)
+    col_max = min(int(np.ceil((world_corners[:, 0].max() - cfg.min_x) * ppm)), shape[1])
+    row_min = max(int(np.floor((world_corners[:, 1].min() - cfg.min_y) * ppm)), 0)
+    row_max = min(int(np.ceil((world_corners[:, 1].max() - cfg.min_y) * ppm)), shape[0])
+    if row_min >= row_max or col_min >= col_max:
+        return np.zeros(shape, dtype=bool)
+
+    x_centers = cfg.min_x + (np.arange(col_min, col_max, dtype=np.float32) + 0.5) / ppm
+    y_centers = cfg.min_y + (np.arange(row_min, row_max, dtype=np.float32) + 0.5) / ppm
+    xx, yy = np.meshgrid(x_centers, y_centers)
+
+    local_x = np.cos(yaw) * (xx - center_x) + np.sin(yaw) * (yy - center_y)
+    local_y = -np.sin(yaw) * (xx - center_x) + np.cos(yaw) * (yy - center_y)
+    local_mask = (np.abs(local_x) <= extent_x) & (np.abs(local_y) <= extent_y)
+
+    mask = np.zeros(shape, dtype=bool)
+    mask[row_min:row_max, col_min:col_max] = local_mask
+    return mask
+
+
+def dynamic_actor_boxes(boxes: list[dict], dynamic_classes: set[str]) -> list[dict]:
+    filtered = []
+    for box in boxes:
+        if box.get("class") not in dynamic_classes:
+            continue
+        num_points = box.get("num_points")
+        if num_points is not None and box.get("class") != "ego_car" and int(num_points) <= 0:
+            continue
+        filtered.append(box)
+    return filtered
+
+
+def align_boxes(boxes: list[dict], measurement_0: dict, measurement_1: dict) -> list[dict]:
+    pos_diff, rot_diff = alignment_delta(measurement_0, measurement_1)
+    aligned = []
+    for box in boxes:
+        center = np.array(
+            [[float(box["position"][0]), float(box["position"][1]), float(box["position"][2])]],
+            dtype=np.float32,
+        )
+        aligned_center = algin_lidar(center, pos_diff, rot_diff)[0]
+        aligned.append(
+            {
+                **box,
+                "position": [float(aligned_center[0]), float(aligned_center[1]), float(aligned_center[2])],
+                "yaw": normalize_angle(float(box["yaw"]) - rot_diff),
+            }
+        )
+    return aligned
+
+
+def dynamic_mask(boxes: list[dict], shape: tuple[int, int], cfg: BevConfig, dynamic_classes: set[str]) -> np.ndarray:
+    mask = np.zeros(shape, dtype=bool)
+    for box in dynamic_actor_boxes(boxes, dynamic_classes):
+        mask |= box_to_mask(box, shape, cfg)
+    return mask
+
+
+def masked_occupancy_iou(a: np.ndarray, b: np.ndarray, mask: np.ndarray) -> float:
+    if mask.shape != a.shape or mask.shape != b.shape:
+        raise ValueError("Mask shape must match occupancy grids.")
+    a_occ = occupancy(a) & ~mask
+    b_occ = occupancy(b) & ~mask
+    return occupancy_iou(a_occ, b_occ)
+
+
 def make_overlay(base_channel: np.ndarray, compare_channel: np.ndarray, color: np.ndarray) -> np.ndarray:
     """Return RGB overlay where base is white and compare is colored."""
     base_occ = occupancy(base_channel)
@@ -258,16 +381,20 @@ def save_image(image: np.ndarray, path: Path) -> None:
 def collect_frame_ids(route_dir: Path) -> list[int]:
     lidar_dir = route_dir / "lidar"
     measurement_dir = route_dir / "measurements"
+    boxes_dir = route_dir / "boxes"
     if not lidar_dir.is_dir():
         raise FileNotFoundError(f"Missing lidar dir: {lidar_dir}")
     if not measurement_dir.is_dir():
         raise FileNotFoundError(f"Missing measurements dir: {measurement_dir}")
+    if not boxes_dir.is_dir():
+        raise FileNotFoundError(f"Missing boxes dir: {boxes_dir}")
 
     lidar_ids = {int(path.stem) for path in lidar_dir.glob("*.laz")}
     measurement_ids = {int(path.name.split(".")[0]) for path in measurement_dir.glob("*.json.gz")}
-    frame_ids = sorted(lidar_ids & measurement_ids)
+    box_ids = {int(path.name.split(".")[0]) for path in boxes_dir.glob("*.json.gz")}
+    frame_ids = sorted(lidar_ids & measurement_ids & box_ids)
     if not frame_ids:
-        raise RuntimeError(f"No matching lidar/measurement frames found under {route_dir}")
+        raise RuntimeError(f"No matching lidar/measurement/boxes frames found under {route_dir}")
     return frame_ids
 
 
@@ -302,11 +429,22 @@ def choose_frames(frame_ids: list[int], requested: int | None, max_history: int,
 
 def discover_route_dirs(root_dir: Path) -> list[Path]:
     route_dirs = []
-    for candidate in sorted(root_dir.rglob("*")):
-        if not candidate.is_dir():
-            continue
-        if (candidate / "lidar").is_dir() and (candidate / "measurements").is_dir():
-            route_dirs.append(candidate)
+    scanned_dirs = 0
+    print(f"Scanning route dirs under {root_dir} ...", flush=True)
+    for current_root, dirnames, _filenames in os.walk(root_dir):
+        scanned_dirs += 1
+        current_path = Path(current_root)
+        if "lidar" in dirnames and "measurements" in dirnames:
+            route_dirs.append(current_path)
+            # No need to walk inside a discovered route dir.
+            dirnames[:] = [name for name in dirnames if name not in {"lidar", "measurements"}]
+        if scanned_dirs % 500 == 0:
+            print(
+                f"  scanned_dirs={scanned_dirs} discovered_routes={len(route_dirs)} current={current_path}",
+                flush=True,
+            )
+    route_dirs = sorted(route_dirs)
+    print(f"Finished scanning. discovered_routes={len(route_dirs)}", flush=True)
     if not route_dirs:
         raise RuntimeError(f"No route directories found under {root_dir}")
     return route_dirs
@@ -324,15 +462,19 @@ def render_for_history(
     output_dir: Path,
     cfg: BevConfig,
     color: np.ndarray,
+    dynamic_classes: set[str],
 ) -> dict[str, object]:
     current_lidar = load_lidar(route_dir / "lidar" / f"{current_frame:04d}.laz")
     current_measurement = load_measurement(route_dir / "measurements" / f"{current_frame:04d}.json.gz")
+    current_boxes = load_boxes(route_dir / "boxes" / f"{current_frame:04d}.json.gz")
 
     history_frame = current_frame - history_offset
     history_lidar = load_lidar(route_dir / "lidar" / f"{history_frame:04d}.laz")
     history_measurement = load_measurement(route_dir / "measurements" / f"{history_frame:04d}.json.gz")
+    history_boxes = load_boxes(route_dir / "boxes" / f"{history_frame:04d}.json.gz")
 
     aligned_lidar = align_lidar(history_lidar, history_measurement, current_measurement)
+    aligned_history_boxes = align_boxes(history_boxes, history_measurement, current_measurement)
 
     current_bev = lidar_to_histogram_features(current_lidar, cfg)
     history_bev = lidar_to_histogram_features(history_lidar, cfg)
@@ -343,12 +485,28 @@ def render_for_history(
     history_channel = history_bev[channel]
     aligned_channel = aligned_bev[channel]
 
-    before_iou = occupancy_iou(current_channel, history_channel)
-    after_iou = occupancy_iou(current_channel, aligned_channel)
+    current_dynamic_mask = dynamic_mask(current_boxes, current_channel.shape, cfg, dynamic_classes)
+    history_dynamic_mask = dynamic_mask(history_boxes, history_channel.shape, cfg, dynamic_classes)
+    aligned_history_dynamic_mask = dynamic_mask(aligned_history_boxes, aligned_channel.shape, cfg, dynamic_classes)
 
-    current_gray = np.repeat(to_uint8_grayscale(current_channel)[..., None], 3, axis=2)
-    before_overlay = make_overlay(current_channel, history_channel, color)
-    after_overlay = make_overlay(current_channel, aligned_channel, color)
+    before_eval_mask = current_dynamic_mask | history_dynamic_mask
+    after_eval_mask = current_dynamic_mask | aligned_history_dynamic_mask
+    visualization_mask = before_eval_mask | after_eval_mask
+
+    before_iou_raw = occupancy_iou(current_channel, history_channel)
+    after_iou_raw = occupancy_iou(current_channel, aligned_channel)
+    before_iou = masked_occupancy_iou(current_channel, history_channel, before_eval_mask)
+    after_iou = masked_occupancy_iou(current_channel, aligned_channel, after_eval_mask)
+
+    current_channel_vis = np.where(visualization_mask, 0.0, current_channel)
+    current_before_vis = np.where(before_eval_mask, 0.0, current_channel)
+    current_after_vis = np.where(after_eval_mask, 0.0, current_channel)
+    history_channel_vis = np.where(before_eval_mask, 0.0, history_channel)
+    aligned_channel_vis = np.where(after_eval_mask, 0.0, aligned_channel)
+
+    current_gray = np.repeat(to_uint8_grayscale(current_channel_vis)[..., None], 3, axis=2)
+    before_overlay = make_overlay(current_before_vis, history_channel_vis, color)
+    after_overlay = make_overlay(current_after_vis, aligned_channel_vis, color)
     comparison = add_separator([current_gray, before_overlay, after_overlay])
 
     save_image(
@@ -360,9 +518,17 @@ def render_for_history(
         "current_frame": current_frame,
         "history_frame": history_frame,
         "history_offset": history_offset,
+        "before_iou_raw": before_iou_raw,
+        "after_iou_raw": after_iou_raw,
+        "iou_gain_raw": after_iou_raw - before_iou_raw,
         "before_iou": before_iou,
         "after_iou": after_iou,
         "iou_gain": after_iou - before_iou,
+        "current_dynamic_pixels": int(current_dynamic_mask.sum()),
+        "history_dynamic_pixels": int(history_dynamic_mask.sum()),
+        "aligned_history_dynamic_pixels": int(aligned_history_dynamic_mask.sum()),
+        "before_masked_pixels": int(before_eval_mask.sum()),
+        "after_masked_pixels": int(after_eval_mask.sum()),
     }
 
 
@@ -373,7 +539,9 @@ def process_route(
     requested_frame: int | None,
     history_offsets: list[int],
     frames_per_route: int,
+    dynamic_classes: set[str],
 ) -> dict[str, object]:
+    print(f"Processing route: {route_dir}", flush=True)
     frame_ids = collect_frame_ids(route_dir)
     max_history = max(history_offsets)
     frames = choose_frames(frame_ids, requested_frame, max_history, frames_per_route)
@@ -396,13 +564,17 @@ def process_route(
                 output_dir=output_dir,
                 cfg=cfg,
                 color=COLOR_CYCLE[index % len(COLOR_CYCLE)],
+                dynamic_classes=dynamic_classes,
             )
             frame_summary["results"].append(result)
             print(
                 f"{route_dir.name} frame={current_frame:04d} history={history_offset:02d} "
                 f"before_iou={result['before_iou']:.4f} "
                 f"after_iou={result['after_iou']:.4f} "
-                f"gain={result['iou_gain']:.4f}"
+                f"gain={result['iou_gain']:.4f} "
+                f"raw_gain={result['iou_gain_raw']:.4f} "
+                f"masked_pixels={result['after_masked_pixels']}",
+                flush=True,
             )
         route_summary["frames"].append(frame_summary)
 
@@ -411,6 +583,19 @@ def process_route(
 
 def main() -> int:
     args = parse_args()
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output dir: {output_dir}", flush=True)
+    if args.route_dir is not None:
+        print(f"Mode: single route ({args.route_dir})", flush=True)
+    else:
+        print(f"Mode: batch root scan ({args.root_dir})", flush=True)
+    print(
+        f"history={args.history} frames_per_route={args.frames_per_route} "
+        f"frame={args.frame} max_routes={args.max_routes}",
+        flush=True,
+    )
+
     cfg = BevConfig(
         min_x=args.min_x,
         max_x=args.max_x,
@@ -422,6 +607,7 @@ def main() -> int:
         lidar_split_height=args.lidar_split_height,
         use_ground_plane=args.include_ground_plane,
     )
+    dynamic_classes = set(args.dynamic_classes)
 
     if args.route_dir is not None:
         route_dirs = [args.route_dir]
@@ -444,12 +630,10 @@ def main() -> int:
             "max_height_lidar": cfg.max_height_lidar,
             "lidar_split_height": cfg.lidar_split_height,
             "use_ground_plane": cfg.use_ground_plane,
+            "dynamic_classes": sorted(dynamic_classes),
         },
         "routes": [],
     }
-
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     for route_dir in route_dirs:
         route_summary = process_route(
@@ -459,6 +643,7 @@ def main() -> int:
             requested_frame=args.frame,
             history_offsets=args.history,
             frames_per_route=args.frames_per_route,
+            dynamic_classes=dynamic_classes,
         )
         summary["routes"].append(route_summary)
 
@@ -466,7 +651,7 @@ def main() -> int:
     with summary_path.open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
 
-    print(f"Saved outputs to {output_dir}")
+    print(f"Saved outputs to {output_dir}", flush=True)
     return 0
 
 
