@@ -2,7 +2,7 @@
 
 本文档记录基于当前代码状态整理出的 `DiffusionDriveAgent` 后续事项。格式参考旧版 `diffusiondrive_claude.md`，但结论以现在的实现为准。
 
-**更新日期**: 2026-04-01
+**更新日期**: 2026-04-26
 **判断基线**:
 
 - 当前代码状态以 `carla_garage/team_code/diffusiondrive_agent.py` 为准
@@ -44,14 +44,20 @@
 - [x] **Stop Sign Controller**
   - [x] 接入基于 CARLA world stop sign actor 的运行时 stop sign controller
   - [x] 不再依赖 `sensor_agent.py` 的 bbox stop sign 检测头
+  - [x] 明确当前选择 actor-based controller 是阶段性工程取舍：先保证 DD 推理链路和规则停车可运行，而不是同时迁移 garage 原模型的 stop sign bbox 检测接口
+  - [ ] 评估 actor-based controller 是否符合目标 leaderboard / sensor-only 约束；若不符合，需要迁移为 sensor-only 的 bbox / route-aware stop sign 逻辑
   - [ ] 评估是否需要进一步迁移为 bbox / route-aware stop sign box 更新逻辑
 
-- [ ] **LiDAR / BEV 对齐验证**
+- [ ] **LiDAR / BEV 对齐验证与近场修复**
   - [x] 添加合成验证脚本 `tools/validate_lidar_bev_alignment.py`
   - [x] 验证在线 `DiffusionDriveAgent.align_lidar()` 与离线 `CARLA_Data.align()` 当前实现一致
   - [x] 验证 `DiffusionDriveAgent` 的负索引历史帧配对优于 `sensor_agent.py` 的旧正索引写法
-  - [ ] 进一步确认当前共享变换公式与标准 SE(2) 刚体变换的残余偏差是否来自 `pos_global/theta` 语义约定
-  - [ ] 必要时增加基于真实 route log 的可视化或调试输出
+  - [x] 用 v3-v9 离线脚本验证动态目标遮挡、粗搜索范围、固定 ROI、common-support、位移先验等路径
+  - [x] 用 batch residual 统计排除明显全局固定 `dx/dy` 偏移；当前不优先按外参或坐标系常量偏差修复
+  - [x] 新增批量诊断与 contact sheet 输出，便于检查 top scenario 和 worst gain case
+  - [ ] 人工检查 `lidar_bev_v9_batch_100_1` 的 contact sheet，确认近场 `0-8m` raw IoU 退化主要来自动态目标、遮挡还是 scorer 偏置
+  - [ ] 下一版 scorer 优先加入近场 `0-8m` raw/dynamic 一致性约束，再用 batch_100 对比 v5/v9
+  - [ ] 低优先级：如果后续仍怀疑 pose 语义，再基于真实 route log 对比当前共享变换公式与标准 SE(2)，不要作为当前主线
 
 - [ ] **Config 体系收敛**
   - [ ] 评估 `GlobalConfig` 与 `DiffusionDriveConfig` 的职责边界
@@ -161,16 +167,27 @@
 
 ## P1 级别问题（影响性能和维护）
 
-### 2. 缺少 Stop Sign Controller
+### 2. Stop Sign Controller 当前是 actor-based 阶段性方案
 
 **问题描述**：
 
-`sensor_agent.py` 中有 stop sign 相关逻辑，`DiffusionDriveAgent` 目前仍未迁入。
+`DiffusionDriveAgent` 已经接入 stop sign controller，但当前实现不是 `sensor_agent.py` 的 bbox stop sign 检测头路线，而是基于 CARLA world actor 的运行时规则 controller。
+
+当前方案在 `_init()` 中通过 `CarlaDataProvider.get_hero_actor()` 获取 ego actor，并用 `RunStopSign(self.hero_actor.get_world())` 跟踪当前 route-relevant stop sign。每步运行时通过 `stop_sign_criteria.tick(hero_actor)` 和 `target_stop_sign`，结合 ego 到 stop sign trigger volume 的距离、当前速度、等待 tick 数，决定是否强制刹车。
+
+选择这个方案的原因是：当前 DiffusionDrive port 的核心目标是先把 NAVSIM DD 的模型推理、LiDAR 时序、轨迹输出和 PID 控制接进 CARLA leaderboard；原 `sensor_agent.py` 的 stop sign 逻辑依赖 garage 原模型的 bbox 输出格式和 stop sign 类别，而当前 DD 模型没有直接产出 `bb[7] == 3` 这种 stop sign bbox 接口。若直接迁移旧逻辑，需要额外补齐 stop sign 监督、检测头类别、bbox 格式对齐、NMS、buffer 运动补偿和 OBB 相交验证，工作量和风险都不属于“基础推理链路接通”本身。
 
 **影响**：
 
-- 在带 stop sign 的场景里，当前 agent 更依赖模型自身轨迹是否学会停下
-- 如果目标是提高规则合规性，这块值得补
+- 好处：stop sign 规则停车与 DD 模型推理解耦，不依赖当前模型是否学会或检测到 stop sign，便于先验证基础闭环运行。
+- 风险：actor-based controller 直接读取 CARLA world actor，可能被视为 privileged 信息；如果后续目标是严格 sensor-only leaderboard 合规，需要改回基于传感器/模型输出的方案。
+- 当前实现可通过 `STOP_CONTROL` 开关独立启停，适合做 ablation 和规则合规性对比。
+
+**后续方向**：
+
+- 明确当前实验目标是否允许使用 CARLA world actor stop sign controller。
+- 如果只做工程闭环和模型训练前验证，可以继续保留 actor-based controller。
+- 如果目标是严格 sensor-only leaderboard，优先迁移为 bbox / route-aware stop sign box 更新逻辑，或在 CARLA 重训时显式加入 stop sign 感知与监督。
 
 ### 3. 双 Config 设计仍然分裂
 
