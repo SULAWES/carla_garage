@@ -60,8 +60,9 @@
   - [ ] 低优先级：如果后续仍怀疑 pose 语义，再基于真实 route log 对比当前共享变换公式与标准 SE(2)，不要作为当前主线
 
 - [ ] **Config 体系收敛**
-  - [ ] 评估 `GlobalConfig` 与 `DiffusionDriveConfig` 的职责边界
-  - [ ] 减少 `setup()` 中的手动参数同步
+  - [x] 评估 `GlobalConfig` 与 `DiffusionDriveConfig` 的职责边界
+  - [x] 新增 `diffusiondrive/config_adapter.py`，集中管理 garage runtime config 到 DD model config 的映射与基础校验
+  - [x] 减少 `setup()` 中的手动参数同步
   - [ ] 明确模型参数与运行参数的统一组织方式
 
 - [ ] **输入预处理核对**
@@ -211,8 +212,8 @@
 
 - 保留 `GlobalConfig` 作为 CARLA 运行时配置
 - 保留 `DiffusionDriveConfig` 作为模型配置
-- 新增显式 builder / adapter，例如 `build_dd_config(global_config, overrides=None)`
-- 将当前 `setup()` 里的手动字段同步集中到一处维护
+- 使用显式 builder / adapter：`build_diffusiondrive_config(global_config, overrides=None)`
+- 将当前 `setup()` 里的手动字段同步集中到 `diffusiondrive/config_adapter.py` 维护
 - 在该 builder / adapter 中显式声明 `status_feature` 各子项维度，以及是否存在独立 `extra_sensors` 分支，避免后续 checkpoint、训练配置和推理侧对输入接口理解不一致
 
 **不推荐方案**：

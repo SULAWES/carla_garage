@@ -27,7 +27,7 @@ from data import CARLA_Data
 from nav_planner import RoutePlanner
 import transfuser_utils as t_u
 
-from diffusiondrive.config import DiffusionDriveConfig
+from diffusiondrive.config_adapter import DiffusionDriveRuntimeOverrides, build_diffusiondrive_config
 from diffusiondrive.model import V2TransfuserModel
 from birds_eye_view.run_stop_sign import RunStopSign
 
@@ -60,29 +60,9 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.data = CARLA_Data(root=[], config=self.config, shared_dict=None)
 
         # DiffusionDrive model config
-        self.dd_config = DiffusionDriveConfig()
-        self.dd_config.lidar_min_x = self.config.min_x
-        self.dd_config.lidar_max_x = self.config.max_x
-        self.dd_config.lidar_min_y = self.config.min_y
-        self.dd_config.lidar_max_y = self.config.max_y
-        self.dd_config.lidar_resolution_height = self.config.lidar_resolution_height
-        self.dd_config.lidar_resolution_width = self.config.lidar_resolution_width
-        self.dd_config.lidar_seq_len = self.config.lidar_seq_len
-        self.dd_config.use_ground_plane = self.config.use_ground_plane
-        self.dd_config.__post_init__()
+        dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
+        self.dd_config = build_diffusiondrive_config(self.config, dd_overrides)
 
-        # Anchor + backbone paths
-        anchor_path = os.environ.get("DIFFUSIONDRIVE_ANCHOR_PATH", "")
-        backbone_path = os.environ.get("DIFFUSIONDRIVE_BACKBONE_PATH", "")
-        if not backbone_path:
-            default_backbone = os.path.join(os.getcwd(), "pytorch_model.bin")
-            if os.path.exists(default_backbone):
-                backbone_path = default_backbone
-        self.dd_config.plan_anchor_path = anchor_path
-        self.dd_config.bkb_path = backbone_path
-
-        if not self.dd_config.plan_anchor_path:
-            raise RuntimeError("DIFFUSIONDRIVE_ANCHOR_PATH is required for DiffusionDrive (plan anchor .npy).")
         # Build model
         self.model = V2TransfuserModel(self.dd_config).to(self.device)
         self.model.eval()
