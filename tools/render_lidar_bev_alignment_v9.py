@@ -356,6 +356,15 @@ def render_for_history(
         "fine_refinement_candidates": int(refinement["fine_candidates"]),
         "fine_refinement_rejected_candidates": int(refinement["fine_rejected_candidates"]),
     }
+    optional_refinement_fields = {
+        "refinement_near_field_raw_iou": "near_field_raw_iou",
+        "refinement_near_field_dynamic_iou": "near_field_dynamic_iou",
+        "refinement_near_field_raw_gain_vs_initial": "near_field_raw_gain",
+        "refinement_near_field_dynamic_gain_vs_initial": "near_field_dynamic_gain",
+    }
+    for result_key, refinement_key in optional_refinement_fields.items():
+        if refinement_key in refinement:
+            result[result_key] = float(refinement[refinement_key])
     result.update(before_bin_fields)
     result.update(initial_after_bin_fields)
     result.update(after_bin_fields)
