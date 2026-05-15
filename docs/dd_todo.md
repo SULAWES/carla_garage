@@ -66,8 +66,10 @@
   - [ ] 明确模型参数与运行参数的统一组织方式
 
 - [ ] **输入预处理核对**
-  - [ ] 核对图像裁剪 / resize / normalize 是否符合后续训练计划
-  - [ ] 核对 JPEG artifact 是否需要保留
+  - [x] 核对并记录当前图像裁剪 / resize / normalize 事实，见 `diffusiondrive_input_preprocessing.md`
+  - [x] 增加 JPEG artifact 和 ImageNet normalization 的推理侧运行时消融开关，默认保持当前行为
+  - [ ] 冻结后续 CARLA 训练的图像裁剪 / resize / normalize 方案
+  - [ ] 用小规模闭环或离线特征统计评估 JPEG artifact 是否需要保留
   - [ ] 核对单前视输入是否满足当前实验目标
 
 - [ ] **轨迹表示一致性**
@@ -76,6 +78,7 @@
   - [ ] 评估是否需要恢复 heading-aware 训练以减少当前“2D anchor + 3D 输出”的半对齐状态
   - [ ] 处理新聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 的时序长度不匹配问题
   - [ ] 当前新 anchor shape 为 `99x10x2`，现有运行链路使用的 anchor shape 为 `20x8x2`，不能直接替换
+  - [x] 记录新 anchor 适配路线，见 `diffusiondrive_anchor_adaptation.md`
   - [ ] 选择适配方案：将 `10` 个 pose 重采样 / 截断到 `8` 个 pose，或同步修改 `trajectory_sampling.num_poses`、模型轨迹头和控制链路以支持 `10` 个 pose
   - [ ] 明确 `99` 个 mode 是否需要同步调整当前依赖 `20` 个 anchor mode 的模块与权重兼容性
 

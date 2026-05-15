@@ -58,6 +58,15 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         # CARLA config for sensors and control
         self.config = GlobalConfig()
         self.data = CARLA_Data(root=[], config=self.config, shared_dict=None)
+        self.apply_jpeg_artifact = strtobool(os.environ.get("DIFFUSIONDRIVE_JPEG_ARTIFACT", "1"))
+        self.image_normalization = os.environ.get("DIFFUSIONDRIVE_IMAGE_NORMALIZATION", "none").lower()
+        if self.image_normalization not in ("none", "imagenet"):
+            raise RuntimeError(
+                "DIFFUSIONDRIVE_IMAGE_NORMALIZATION must be one of: none, imagenet; "
+                f"got {self.image_normalization}."
+            )
+        print("Use JPEG artifact in DiffusionDrive image preprocessing:", self.apply_jpeg_artifact)
+        print("DiffusionDrive image normalization:", self.image_normalization)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
@@ -313,8 +322,9 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
     def tick(self, input_data):
         rgb = []
         camera = input_data['rgb_front'][1][:, :, :3]
-        _, compressed_image_i = cv2.imencode('.jpg', camera)
-        camera = cv2.imdecode(compressed_image_i, cv2.IMREAD_UNCHANGED)
+        if self.apply_jpeg_artifact:
+            _, compressed_image_i = cv2.imencode('.jpg', camera)
+            camera = cv2.imdecode(compressed_image_i, cv2.IMREAD_UNCHANGED)
 
         rgb_pos = cv2.cvtColor(camera, cv2.COLOR_BGR2RGB)
         rgb_pos = t_u.crop_array(self.config, rgb_pos)
@@ -374,6 +384,27 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         result['speed'] = torch.FloatTensor([speed]).to(self.device, dtype=torch.float32)
 
         return result
+
+    def _prepare_camera_feature(self, rgb):
+        """Resize camera input and apply the selected runtime normalization."""
+        rgb = rgb / 255.0
+        rgb = F.interpolate(
+            rgb,
+            size=(self.dd_config.camera_height, self.dd_config.camera_width),
+            mode='bilinear',
+            align_corners=False,
+        )
+        if self.image_normalization == "imagenet":
+            if rgb.shape[1] % 3 != 0:
+                raise RuntimeError(
+                    "ImageNet normalization expects RGB channel groups; "
+                    f"got {rgb.shape[1]} channels."
+                )
+            repeats = rgb.shape[1] // 3
+            mean = torch.tensor([0.485, 0.456, 0.406] * repeats, device=rgb.device, dtype=rgb.dtype)
+            std = torch.tensor([0.229, 0.224, 0.225] * repeats, device=rgb.device, dtype=rgb.dtype)
+            rgb = (rgb - mean.view(1, -1, 1, 1)) / std.view(1, -1, 1, 1)
+        return rgb
 
     def _build_status(self, tick_data):
         speed = tick_data['speed'].item()
@@ -540,9 +571,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         self.lidar_last = deepcopy(tick_data['lidar'])
 
-        # Prepare camera (normalize to 0-1 and resize to model input)
-        rgb = tick_data['rgb'] / 255.0
-        rgb = F.interpolate(rgb, size=(self.dd_config.camera_height, self.dd_config.camera_width), mode='bilinear', align_corners=False)
+        rgb = self._prepare_camera_feature(tick_data['rgb'])
 
         status = self._build_status(tick_data)
 

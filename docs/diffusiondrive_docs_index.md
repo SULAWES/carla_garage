@@ -10,6 +10,8 @@
 - [lidar_bev_alignment_issues.md](lidar_bev_alignment_issues.md)：LiDAR / BEV 对齐从 `v3` 到 `v10` 的详细排查记录和实验结论。
 - [diffusiondrive_agent_explained.md](diffusiondrive_agent_explained.md)：当前 CARLA 侧 DiffusionDriveAgent 结构说明。
 - [diffusiondrive_navsim_vs_carla_gap.md](diffusiondrive_navsim_vs_carla_gap.md)：NAVSIM 原版 DiffusionDrive 与 CARLA Garage 环境差异。
+- [diffusiondrive_input_preprocessing.md](diffusiondrive_input_preprocessing.md)：当前 DiffusionDrive 输入预处理核对和训练前决策项。
+- [diffusiondrive_anchor_adaptation.md](diffusiondrive_anchor_adaptation.md)：最新 `99x10x2` anchor 的适配路线。
 - [diffusiondrive_run.md](diffusiondrive_run.md)：运行 DiffusionDriveAgent 的说明。
 
 ### 背景和工程说明

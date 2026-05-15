@@ -30,6 +30,7 @@
 - [ ] **训练标签与轨迹定义冻结**
   - [ ] 明确未来轨迹采样方式
   - [ ] 明确 anchor 生成方式与数组形状
+  - [x] 记录最新 `99x10x2` anchor 与当前 `20x8x2` 接口差异，见 `diffusiondrive_anchor_adaptation.md`
   - [ ] 明确 heading 是否仍由轨迹 head 预测
   - [ ] 明确是否采用新聚类 anchor：`99` 个 mode，每个 mode 对应 `10x2` 轨迹点
 
@@ -47,6 +48,7 @@
   - [ ] 明确 `status_feature` 和 `extra_sensors` 是否并存，还是合并为单一状态输入
 
 - [ ] **图像预处理方案验证**
+  - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`
   - [ ] 评估 JPEG artifact 是否需要保留
   - [ ] 评估是否需要 ImageNet mean/std normalization
   - [ ] 评估单前视与多相机的收益差异
