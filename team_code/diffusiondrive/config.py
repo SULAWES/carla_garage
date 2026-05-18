@@ -10,7 +10,7 @@ class TrajectorySampling:
 
     @property
     def num_poses(self) -> int:
-        # Example: 4.0 / 0.5 = 8
+        # Example: 4.0 / 0.5 = 8; 5.0 / 0.5 = 10.
         return int(round(self.time_horizon / self.interval_length))
 
 
@@ -24,6 +24,7 @@ class DiffusionDriveConfig:
     lidar_architecture: str = "resnet34"
     bkb_path: str = ""
     plan_anchor_path: str = ""
+    num_anchor_modes: int = 20
 
     latent: bool = False
     latent_rad_thresh: float = 4.0 * math.pi / 9.0

@@ -123,14 +123,21 @@ class LossComputer(nn.Module):
         self.reg_loss_weight = config.trajectory_reg_weight
     def forward(self, poses_reg, poses_cls, targets, plan_anchor):
         """
-        pred_traj: (bs, 20, 8, 3)
-        pred_cls: (bs, 20)
-        plan_anchor: (bs,20, 8, 2)
-        targets['trajectory']: (bs, 8, 3)
+        pred_traj: (bs, num_modes, num_poses, 2)
+        pred_cls: (bs, num_modes)
+        plan_anchor: (bs, num_modes, num_poses, 2)
+        targets['trajectory']: (bs, num_poses, 2) or (bs, num_poses, >=2)
         """
         bs, num_mode, ts, d = poses_reg.shape
-        target_traj = targets["trajectory"]
-        dist = torch.linalg.norm(target_traj.unsqueeze(1)[...,:2] - plan_anchor, dim=-1)
+        if d != 2:
+            raise RuntimeError(f"DiffusionDrive trajectory regression expects 2D output, got {poses_reg.shape}.")
+        target_traj = targets["trajectory"][..., :2]
+        if target_traj.shape[1] != ts:
+            raise RuntimeError(
+                "DiffusionDrive target trajectory length must match prediction length: "
+                f"target shape {target_traj.shape}, prediction shape {poses_reg.shape}."
+            )
+        dist = torch.linalg.norm(target_traj.unsqueeze(1) - plan_anchor, dim=-1)
         dist = dist.mean(dim=-1)
         mode_idx = torch.argmin(dist, dim=-1)
         cls_target = mode_idx

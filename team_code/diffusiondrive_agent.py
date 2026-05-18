@@ -582,7 +582,9 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         })
 
         traj = outputs['trajectory']
-        waypoints = traj[:, :, :2]
+        if traj.shape[-1] != 2:
+            raise RuntimeError(f"DiffusionDriveAgent expects 2D trajectory output, got {traj.shape}.")
+        waypoints = traj
 
         speed = tick_data['speed'].item()
         steer, throttle, brake = self._control_pid(waypoints, speed)

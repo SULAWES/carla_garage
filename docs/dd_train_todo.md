@@ -21,23 +21,29 @@
 ### P0 级别（训练前必须明确）
 
 - [ ] **训练输入定义冻结**
-  - [ ] 明确相机输入方案：单前视还是多相机拼接
-  - [ ] 明确图像裁剪 / resize / normalize 方案
-  - [ ] 明确 LiDAR 输入通道定义
+  - [x] 明确相机输入方案：第一阶段采用 CARLA-native 单前视，不采用 NAVSIM 三相机拼接
+  - [x] 明确图像裁剪 / resize / normalize 方案：`512x1024 -> crop_array 384x1024 -> resize 256x1024 -> [0,1]`，默认无 ImageNet normalization
+  - [x] 明确 LiDAR 输入通道定义：沿用 garage histogram，默认 `use_ground_plane=False`，每帧 `1` 个 above-split 通道；多帧时按 `lidar_seq_len` 拼接
   - [ ] 明确 `status_feature` 的最终定义
   - [ ] 明确是否保留独立 `extra_sensors` 分支，以及其输入组成
 
 - [ ] **训练标签与轨迹定义冻结**
   - [ ] 明确未来轨迹采样方式
   - [ ] 明确 anchor 生成方式与数组形状
-  - [x] 记录最新 `99x10x2` anchor 与当前 `20x8x2` 接口差异，见 `diffusiondrive_anchor_adaptation.md`
-  - [ ] 明确 heading 是否仍由轨迹 head 预测
-  - [ ] 明确是否采用新聚类 anchor：`99` 个 mode，每个 mode 对应 `10x2` 轨迹点
+  - [x] 校验最新 `99x10x2` anchor 与源 JSON 一致，并记录直接升级路线，见 `diffusiondrive_anchor_adaptation.md`
+  - [x] 明确 heading 不由轨迹 head 预测，主轨迹接口固定为 XY
+  - [x] 明确采用新聚类 anchor：`99` 个 mode，每个 mode 对应 `10x2` 轨迹点
 
 - [ ] **数据集生成规范**
   - [ ] 明确需要采哪些传感器
   - [ ] 明确数据保存频率和时序长度
   - [ ] 明确训练 / 验证 / 测试切分方式
+
+- [x] **最小训练入口**
+  - [x] 新增 `team_code/train_diffusiondrive.py`
+  - [x] 新增 raw Bench2Drive 数据集 helper `team_code/diffusiondrive/carla_native_dataset.py`
+  - [x] 支持 trajectory loss-only 单机训练
+  - [x] 用 Bench2Drive mini 跑通 1-step training smoke
 
 ### P1 级别（直接影响训练效果）
 
@@ -49,6 +55,7 @@
 
 - [ ] **图像预处理方案验证**
   - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`
+  - [x] 冻结第一阶段 CARLA-native 图像预处理主线：单前视、去底部裁剪、`[0,1]`、默认 JPEG artifact、无 ImageNet normalization
   - [ ] 评估 JPEG artifact 是否需要保留
   - [ ] 评估是否需要 ImageNet mean/std normalization
   - [ ] 评估单前视与多相机的收益差异
@@ -59,10 +66,10 @@
   - [ ] 验证时序 realign 对训练标签的一致性
 
 - [ ] **轨迹表示统一**
-  - [ ] 明确最终采用 `8x2` 还是 `8x3(x, y, heading)` 轨迹表示
-  - [ ] 训练与推理统一使用同一套 anchor / 归一化 / 输出语义
-  - [ ] 如果保留 heading，明确监督与损失设计
-  - [ ] 若采用新聚类结果，明确 `99x10x2` 是否直接作为训练 anchor，还是先重采样 / 截断为兼容格式
+  - [x] 明确最终采用 `99x10x2` 轨迹表示
+  - [x] 训练与推理统一使用同一套 anchor / 归一化 / 输出语义
+  - [x] 明确不在轨迹 head 中保留 heading；如后续需要 heading-aware 控制，另行设计监督与接口
+  - [x] 明确新聚类结果直接作为 `99x10x2` 正式 anchor，不再重采样 / 截断为兼容格式
 
 ### P2 级别（训练后闭环增强）
 
@@ -122,7 +129,7 @@
 - 语义上等价于一条拉直后的 `10` 个路点 `(x, y)` 轨迹
 - 提取后的 anchor 文件 shape 为 `99x10x2`
 
-这说明新的聚类结果已经可供训练侧使用，但它与当前推理默认使用的 `20x8x2` anchor 仍不兼容，接入前必须先冻结训练方案。
+这说明新的聚类结果已经可供训练侧使用；当前决策是直接将推理 / 训练接口升级到 `99x10x2`，而不是生成兼容版 `20x8x2`。
 
 ---
 
@@ -163,12 +170,13 @@
 
 当前推理侧使用单前视相机，但原版 navsim 更接近多相机拼接输入。
 
-**需要明确**：
+**已冻结的第一阶段方案**：
 
-- 是否继续用单前视
-- 是否改成多相机拼接
-- 最终输入尺寸是多少
-- 是否与推理侧保持完全一致
+- 继续用 CARLA-native 单前视相机。
+- 不按 NAVSIM 三相机拼接作为当前主线。
+- 在线传感器保持 `512x1024`，裁剪为 `384x1024`，再 resize 到模型输入 `256x1024`。
+- 训练侧必须与推理侧保持同一套裁剪、resize 和 normalization 语义。
+- 多相机拼接保留为后续单独实验，不能混入第一阶段训练基线。
 
 ### 3. 数据规范需要尽早固定
 
@@ -206,18 +214,18 @@
 
 **问题描述**：
 
-当前实现里二维 anchor 与三维轨迹输出并存。对于继续训练来说，这种“部分 2D、部分 3D”的状态不适合长期保留。
+当前实现已经将主轨迹接口统一为 `99x10x2`。对于继续训练来说，训练标签也应按 `10x2` XY 轨迹组织；若数据构建阶段暂时保留 heading，loss 只会使用前两维 XY。
 
-另外，新提取出的聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 目前是 `99x10x2`。它对应的原始 JSON 里，每个 cluster 的 `mu` 都是一条拉直后的 `10` 点轨迹，也就是一个 `20D` 向量；这与当前推理链路使用的 `20x8x2` anchor 在 mode 数和时间步长度上都不同。
+另外，新提取出的聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 目前是 `99x10x2`。它对应的原始 JSON 里，每个 cluster 的 `mu` 都是一条拉直后的 `10` 点轨迹，也就是一个 `20D` 向量；这已作为新的正式 anchor 接口。
 
-**需要明确**：
+**已明确**：
 
-- 训练目标到底是 2D 还是 3D 轨迹
-- anchor、归一化、loss、输出头是否完全一致
-- 控制器后续会不会利用 heading
-- 新聚类 anchor 是否直接作为正式训练 anchor
-- 如果采用新 anchor，`trajectory_sampling.num_poses`、loss、控制链路和 checkpoint 策略是否同步升级到 `99x10x2`
-- 如果不直接采用，是否先离线生成兼容版 anchor 再进入训练
+- 训练目标采用 2D XY 轨迹
+- anchor、归一化、loss、输出头和控制入口统一为 `99x10x2`
+- 控制器当前只消费 XY waypoint，不利用 heading
+- 新聚类 anchor 直接作为正式训练 anchor
+- `trajectory_sampling.num_poses`、loss、控制链路和 checkpoint 策略已按 `99x10x2` 同步升级
+- 当前不再生成兼容版 anchor；后续训练直接围绕 `99x10x2` 组织
 
 ### 6. 训练后闭环参数需要重新调
 

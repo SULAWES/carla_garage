@@ -73,14 +73,14 @@
   - [ ] 核对单前视输入是否满足当前实验目标
 
 - [ ] **轨迹表示一致性**
-  - [ ] 明确 CARLA 侧训练 / 推理统一使用 `8x2` 还是 `8x3(x, y, heading)` 轨迹表示
-  - [ ] 核对 `plan_anchor`、`norm_odo()/denorm_odo()` 与最终 `trajectory` 输出的维度语义是否一致
-  - [ ] 评估是否需要恢复 heading-aware 训练以减少当前“2D anchor + 3D 输出”的半对齐状态
-  - [ ] 处理新聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 的时序长度不匹配问题
-  - [ ] 当前新 anchor shape 为 `99x10x2`，现有运行链路使用的 anchor shape 为 `20x8x2`，不能直接替换
-  - [x] 记录新 anchor 适配路线，见 `diffusiondrive_anchor_adaptation.md`
-  - [ ] 选择适配方案：将 `10` 个 pose 重采样 / 截断到 `8` 个 pose，或同步修改 `trajectory_sampling.num_poses`、模型轨迹头和控制链路以支持 `10` 个 pose
-  - [ ] 明确 `99` 个 mode 是否需要同步调整当前依赖 `20` 个 anchor mode 的模块与权重兼容性
+  - [x] 明确 CARLA 侧训练 / 推理统一使用 `99x10x2` 轨迹表示，不在轨迹 head 中预测 heading
+  - [x] 核对 `plan_anchor`、`norm_odo()/denorm_odo()` 与最终 `trajectory` 输出的维度语义是否一致
+  - [x] 消除当前“2D anchor + 3D 输出”的半对齐状态
+  - [x] 校验新聚类 anchor `4-0-0-1910-tracked_clusters_anchor.npy` 与源 JSON 完全一致
+  - [x] 记录新 anchor 直接升级路线，见 `diffusiondrive_anchor_adaptation.md`
+  - [x] 选择适配方案：直接同步修改 `trajectory_sampling.num_poses`、模型轨迹头和控制链路以支持 `99x10x2`
+  - [x] 明确 `99` 个 mode 需要同步调整当前依赖 `20` 个 anchor mode 的模块与权重兼容性
+  - [x] 用新 anchor 跑 DiffusionDrive 模型实例化 / checkpoint 加载 smoke test
 
 ### P2 级别（增强项）
 
@@ -251,27 +251,25 @@
 - `extra_sensors` 是 `carla_garage/team_code/model.py` 中的另一套可选输入机制：若开启，会将 `velocity(1)` 和 / 或 `discrete_command(6)` 拼接后送入 `extra_sensor_encoder`
 - 因此后续训练设计里需要明确：是只保留 `status_feature`，还是同时引入独立 `extra_sensors` 分支
 
-### 5. 轨迹表示目前仍处于“部分改成 2D”状态
+### 5. 轨迹表示已明确为 `99x10x2`
 
 **问题描述**：
 
-当前 CARLA 版为了适配现有 anchor，已经把 `plan_anchor` 相关处理改成了二维 `(x, y)` 假设；但模型解码输出和原版方法仍然保留了 `(x, y, heading)` 轨迹结构。
+仓库中新提取出的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 当前为 `99x10x2`。当前决策是不再生成兼容版 `20x8x2`，而是直接将推理 / 训练接口升级到 `99x10x2`。
 
-另外，仓库中新提取出的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 当前为 `99x10x2`，与现有推理所用的 `20x8x2` anchor 设定不一致，因此目前只能作为候选输入，不能直接替换 `plan_anchor.npy`。
+当前实现中 `plan_anchor`、`norm_odo()/denorm_odo()`、模型解码输出、loss 和 agent 控制入口都统一为二维 `(x, y)` 轨迹；heading 不再由轨迹 head 预测。
 
 **影响**：
 
-- 当前实现能跑，但轨迹表示在 anchor、归一化和最终输出之间不是完全统一的
-- 这会增加后续训练设计和调试成本
-- 如果未来希望引入更贴合轨迹朝向的控制或分析，这个不一致会变成阻碍
-- 新 anchor 若直接接入，会同时引入 mode 数和时序长度两处接口变化，影响模型结构、checkpoint 对齐和控制逻辑
+- 新 anchor 直接接入会同时引入 mode 数和时序长度两处接口变化，影响模型结构、checkpoint 对齐和控制逻辑
+- 旧 `20x8x2` checkpoint 的 trajectory head 相关权重会出现 shape mismatch，不能作为最终性能判断基线
+- 后续训练标签需要按 `10x2` 组织，若原始标签含 heading，loss 只使用前两维 XY
 
 **推荐方向**：
 
-- 明确 CARLA 侧最终采用 `8x2` 还是 `8x3`
-- 训练与推理统一使用同一套轨迹表示
-- 如果准备在 CARLA 上系统训练，优先评估恢复 heading-aware 监督
-- 单独决定新 anchor 的接入策略：先做离线重采样得到 `20x8x2` 兼容版，或系统性升级为 `99x10x2`
+- 训练与推理统一使用同一套 `99x10x2` 轨迹表示
+- 保持控制链路只消费 XY waypoint；如未来需要 heading-aware 控制，另行设计独立监督
+- 新 anchor 接入策略已定：系统性升级为 `99x10x2`
 
 ---
 

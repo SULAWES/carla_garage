@@ -4,6 +4,7 @@ Implements the TransFuser vision backbone.
 
 import copy
 import math
+import os
 
 import timm
 import torch
@@ -20,12 +21,22 @@ class TransfuserBackbone(nn.Module):
 
         super().__init__()
         self.config = config
-        try:
-            self.image_encoder = timm.create_model(config.image_architecture, pretrained=True, features_only=True)
-        except Exception as e:
-            print(f"Failed to load image encoder with error: {e}")
-            self.image_encoder = timm.create_model(config.image_architecture, pretrained=True, features_only=True,
-                                                   pretrained_cfg_overlay=dict(file=config.bkb_path))
+        self.image_encoder = None
+        if config.bkb_path and os.path.isfile(config.bkb_path):
+            self.image_encoder = timm.create_model(
+                config.image_architecture,
+                pretrained=True,
+                features_only=True,
+                pretrained_cfg_overlay=dict(file=config.bkb_path),
+            )
+        else:
+            try:
+                self.image_encoder = timm.create_model(config.image_architecture, pretrained=True, features_only=True)
+            except Exception as e:
+                raise RuntimeError(
+                    "Failed to load pretrained image encoder and no local bkb_path file was available. "
+                    f"Set DIFFUSIONDRIVE_BACKBONE_PATH or config.bkb_path. Original error: {e}"
+                ) from e
         if config.use_ground_plane:
             in_channels = 2 * config.lidar_seq_len
         else:

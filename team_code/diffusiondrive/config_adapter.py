@@ -40,6 +40,13 @@ def build_diffusiondrive_config(
         plan_anchor_path=overrides.anchor_path,
         bkb_path=overrides.backbone_path,
     )
+    if dd_config.plan_anchor_path and os.path.isfile(dd_config.plan_anchor_path):
+        plan_anchor_shape = np.load(dd_config.plan_anchor_path, mmap_mode="r").shape
+        if len(plan_anchor_shape) == 3:
+            dd_config.num_anchor_modes = int(plan_anchor_shape[0])
+            dd_config.trajectory_sampling.time_horizon = (
+                float(plan_anchor_shape[1]) * dd_config.trajectory_sampling.interval_length
+            )
 
     dd_config.lidar_min_x = global_config.min_x
     dd_config.lidar_max_x = global_config.max_x
@@ -69,10 +76,16 @@ def validate_diffusiondrive_config(config: DiffusionDriveConfig) -> None:
 
     plan_anchor = np.load(config.plan_anchor_path, mmap_mode="r")
     expected_num_poses = config.trajectory_sampling.num_poses
+    expected_num_modes = config.num_anchor_modes
     if plan_anchor.ndim != 3:
         raise RuntimeError(
             "DiffusionDrive plan anchor must have shape (num_modes, num_poses, 2); "
             f"got {plan_anchor.shape}."
+        )
+    if plan_anchor.shape[0] != expected_num_modes:
+        raise RuntimeError(
+            "DiffusionDrive plan anchor mode count does not match num_anchor_modes: "
+            f"anchor shape {plan_anchor.shape}, expected {expected_num_modes} modes."
         )
     if plan_anchor.shape[1] != expected_num_poses:
         raise RuntimeError(
@@ -83,11 +96,6 @@ def validate_diffusiondrive_config(config: DiffusionDriveConfig) -> None:
         raise RuntimeError(
             "DiffusionDrive plan anchor must be 2D (x, y) for the current CARLA port; "
             f"got last dimension {plan_anchor.shape[2]}."
-        )
-    if plan_anchor.shape[0] != 20:
-        raise RuntimeError(
-            "DiffusionDrive plan anchor mode count must remain 20 for the current checkpoint/model interface; "
-            f"got {plan_anchor.shape[0]} modes."
         )
 
     expected_status_dim = config.command_dim + config.velocity_dim + config.accel_dim

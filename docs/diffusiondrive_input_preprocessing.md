@@ -88,31 +88,47 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 
 ## 当前结论
 
-1. 当前闭环基线应继续默认使用：
+1. CARLA 原生训练第一阶段正式冻结为 CARLA-native 单前视方案：
    - 单前视相机
-   - JPEG artifact 开启
+   - 传感器分辨率 `512x1024`
+   - `crop_array(): 512x1024 -> 384x1024`
+   - resize 到 DiffusionDrive 模型输入 `256x1024`
+   - 输入数值范围 `[0, 1]`
+   - 默认不做 ImageNet mean/std normalization
+   - 默认保留 JPEG artifact，使训练侧和当前 leaderboard 在线推理路径一致
+
+2. 训练和推理必须共用同一套预处理语义。后续新增训练脚本时，训练侧应直接复用或镜像 `DiffusionDriveAgent` 当前相机路径：
+   - `BGR -> RGB`
    - `crop_array(): 512x1024 -> 384x1024`
    - resize 到 `256x1024`
-   - `[0, 1]` normalization
+   - `/255.0`
+   - `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none`
 
-2. 如果目标是零样本或少量微调原版 NAVSIM checkpoint，优先怀疑相机视野分布 mismatch：
+3. 现阶段不按 NAVSIM 三相机 crop 作为主线。NAVSIM 方案只保留为后续大实验选项，不能作为第一阶段 CARLA-native 训练的默认预处理。
+
+4. 如果目标是零样本或少量微调原版 NAVSIM checkpoint，优先怀疑相机视野分布 mismatch：
    - 单前视 vs 三相机拼接
    - CARLA 去底部裁剪 vs NAVSIM 上下裁剪
    - JPEG artifact 是否引入额外退化
 
-3. 如果目标是在 CARLA 上重新训练，训练侧必须与推理侧冻结同一套预处理。建议第一阶段先保留当前单前视路径，并用新增运行时开关做小规模消融：
+5. 如果后续要做性能消融，可以在冻结主线之外比较：
    - `DIFFUSIONDRIVE_JPEG_ARTIFACT=1/0`
    - `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none/imagenet`
+   - 单前视 vs 多相机
 
-4. 多相机拼接不是简单预处理开关，需要同时改 leaderboard 传感器注册、图像拼接、训练数据采集和 checkpoint 兼容策略，应作为单独决策项处理。
+6. 多相机拼接不是简单预处理开关，需要同时改 leaderboard 传感器注册、图像拼接、训练数据采集和 checkpoint 兼容策略，应作为单独决策项处理。
 
-## 后续待冻结决策
+## 已冻结决策
 
-- 是否正式继续单前视，还是升级到 CARLA 多相机拼接。
-- 若继续单前视，是否保持当前去底部裁剪，还是改成更接近 NAVSIM 的上下裁剪。
-- CARLA 重新训练时是否保留 JPEG artifact。
-- CARLA 重新训练时是否引入 ImageNet mean/std normalization。
+- 第一阶段正式继续单前视，不升级到 NAVSIM 式三相机拼接。
+- 第一阶段保持当前 CARLA / garage 去底部裁剪，不改成 NAVSIM 上下裁剪。
+- CARLA 重新训练第一阶段保留 JPEG artifact，和当前在线推理默认路径一致。
+- CARLA 重新训练第一阶段不引入 ImageNet mean/std normalization。
+
+## 后续工程项
+
 - 训练数据加载、在线推理和可视化调试是否共用同一份预处理 helper，减少未来分叉。
+- 若使用原始 Bench2Drive mini/full 数据，不能直接套用 `900x1600 -> crop_array()` 作为最终训练规范；需要先转换/采集到与在线 CARLA sensor 一致的 `512x1024` 单前视输入，或显式定义一套 raw Bench2Drive 到 CARLA-native 输入的转换规则。
 
 ## 最小测试计划
 

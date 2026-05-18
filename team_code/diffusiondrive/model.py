@@ -5,7 +5,7 @@ import torch.nn as nn
 import copy
 from .config import DiffusionDriveConfig
 from .backbone import TransfuserBackbone
-from .enums import BoundingBox2DIndex, StateSE2Index
+from .enums import BoundingBox2DIndex
 from diffusers.schedulers import DDIMScheduler
 from .modules.conditional_unet1d import ConditionalUnet1D, SinusoidalPosEmb
 import torch.nn.functional as F
@@ -183,7 +183,7 @@ class DiffMotionPlanningRefinementModule(nn.Module):
         self,
         embed_dims=256,
         ego_fut_ts=8,
-        ego_fut_mode=20,
+        ego_fut_mode=None,
         if_zeroinit_reg=True,
     ):
         super(DiffMotionPlanningRefinementModule, self).__init__()
@@ -199,7 +199,7 @@ class DiffMotionPlanningRefinementModule(nn.Module):
             nn.ReLU(),
             nn.Linear(embed_dims, embed_dims),
             nn.ReLU(),
-            nn.Linear(embed_dims, ego_fut_ts * 3),
+            nn.Linear(embed_dims, ego_fut_ts * 2),
         )
         self.if_zeroinit_reg = False
 
@@ -222,7 +222,7 @@ class DiffMotionPlanningRefinementModule(nn.Module):
         traj_feature = traj_feature.view(bs, ego_fut_mode,-1)
         plan_cls = self.plan_cls_branch(traj_feature).squeeze(-1)
         traj_delta = self.plan_reg_branch(traj_feature)
-        plan_reg = traj_delta.reshape(bs,ego_fut_mode, self.ego_fut_ts, 3)
+        plan_reg = traj_delta.reshape(bs,ego_fut_mode, self.ego_fut_ts, 2)
 
         return plan_reg, plan_cls
 class ModulationLayer(nn.Module):
@@ -307,7 +307,7 @@ class CustomTransformerDecoderLayer(nn.Module):
         self.task_decoder = DiffMotionPlanningRefinementModule(
             embed_dims=config.tf_d_model,
             ego_fut_ts=num_poses,
-            ego_fut_mode=20,
+            ego_fut_mode=config.num_anchor_modes,
         )
 
     def forward(self, 
@@ -335,10 +335,9 @@ class CustomTransformerDecoderLayer(nn.Module):
         # 4.8 modulate with time steps
         traj_feature = self.time_modulation(traj_feature, time_embed,global_cond=None,global_img=global_img)
         
-        # 4.9 predict the offset & heading
-        poses_reg, poses_cls = self.task_decoder(traj_feature) #bs,20,8,3; bs,20
-        poses_reg[...,:2] = poses_reg[...,:2] + noisy_traj_points
-        poses_reg[..., StateSE2Index.HEADING] = poses_reg[..., StateSE2Index.HEADING].tanh() * np.pi
+        # 4.9 predict the XY offset from the current noisy trajectory points.
+        poses_reg, poses_cls = self.task_decoder(traj_feature) # bs,num_modes,num_poses,2; bs,num_modes
+        poses_reg = poses_reg + noisy_traj_points
 
         return poses_reg, poses_cls
 def _get_clones(module, N):
@@ -375,7 +374,7 @@ class CustomTransformerDecoder(nn.Module):
             poses_reg, poses_cls = mod(traj_feature, traj_points, bev_feature, bev_spatial_shape, agents_query, ego_query, time_embed, status_encoding,global_img)
             poses_reg_list.append(poses_reg)
             poses_cls_list.append(poses_cls)
-            traj_points = poses_reg[...,:2].clone().detach()
+            traj_points = poses_reg.clone().detach()
         return poses_reg_list, poses_cls_list
 
 class TrajectoryHead(nn.Module):
@@ -384,7 +383,7 @@ class TrajectoryHead(nn.Module):
     def __init__(self, num_poses: int, d_ffn: int, d_model: int, plan_anchor_path: str, config: DiffusionDriveConfig):
         """
         Initializes trajectory head.
-        :param num_poses: number of (x,y,θ) poses to predict
+        :param num_poses: number of (x, y) poses to predict
         :param d_ffn: dimensionality of feed-forward network
         :param d_model: input dimensionality
         """
@@ -394,7 +393,6 @@ class TrajectoryHead(nn.Module):
         self._d_model = d_model
         self._d_ffn = d_ffn
         self.diff_loss_weight = 2.0
-        self.ego_fut_mode = 20
 
         self.diffusion_scheduler = DDIMScheduler(
             num_train_timesteps=1000,
@@ -404,13 +402,19 @@ class TrajectoryHead(nn.Module):
 
 
         plan_anchor = np.load(plan_anchor_path)
+        if plan_anchor.shape[1] != num_poses:
+            raise RuntimeError(
+                "DiffusionDrive plan anchor pose count must match trajectory_sampling.num_poses: "
+                f"anchor shape {plan_anchor.shape}, expected {num_poses} poses."
+            )
+        self.ego_fut_mode = int(plan_anchor.shape[0])
 
         self.plan_anchor = nn.Parameter(
             torch.tensor(plan_anchor, dtype=torch.float32),
             requires_grad=False,
-        ) # 20,8,2
+        ) # num_modes,num_poses,2
         self.plan_anchor_encoder = nn.Sequential(
-            *linear_relu_ln(d_model, 1, 1,512),
+            *linear_relu_ln(d_model, 1, 1, 64 * num_poses),
             nn.Linear(d_model, d_model),
         )
         self.time_mlp = nn.Sequential(
@@ -430,8 +434,7 @@ class TrajectoryHead(nn.Module):
 
         self.loss_computer = LossComputer(config)
     def norm_odo(self, odo_info_fut):
-        # DiffusionDrive anchors are (x, y). Heading is predicted by the decoder head.
-        # Keep this function 2D so anchors can be (num_mode, T, 2).
+        # DiffusionDrive anchors and trajectory outputs are both (x, y).
         odo_info_fut_x = odo_info_fut[..., 0:1]
         odo_info_fut_y = odo_info_fut[..., 1:2]
 
@@ -494,7 +497,7 @@ class TrajectoryHead(nn.Module):
             ret_traj_loss += trajectory_loss
 
         mode_idx = poses_cls_list[-1].argmax(dim=-1)
-        mode_idx = mode_idx[...,None,None,None].repeat(1,1,self._num_poses,3)
+        mode_idx = mode_idx[...,None,None,None].repeat(1,1,self._num_poses,2)
         best_reg = torch.gather(poses_reg_list[-1], 1, mode_idx).squeeze(1)
         return {"trajectory": best_reg,"trajectory_loss":ret_traj_loss,"trajectory_loss_dict":trajectory_loss_dict}
 
@@ -542,14 +545,13 @@ class TrajectoryHead(nn.Module):
             poses_reg_list, poses_cls_list = self.diff_decoder(traj_feature, noisy_traj_points, bev_feature, bev_spatial_shape, agents_query, ego_query, time_embed, status_encoding,global_img)
             poses_reg = poses_reg_list[-1]
             poses_cls = poses_cls_list[-1]
-            x_start = poses_reg[...,:2]
-            x_start = self.norm_odo(x_start)
+            x_start = self.norm_odo(poses_reg)
             img = self.diffusion_scheduler.step(
                 model_output=x_start,
                 timestep=k,
                 sample=img
             ).prev_sample
         mode_idx = poses_cls.argmax(dim=-1)
-        mode_idx = mode_idx[...,None,None,None].repeat(1,1,self._num_poses,3)
+        mode_idx = mode_idx[...,None,None,None].repeat(1,1,self._num_poses,2)
         best_reg = torch.gather(poses_reg, 1, mode_idx).squeeze(1)
         return {"trajectory": best_reg}

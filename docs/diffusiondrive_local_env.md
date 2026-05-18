@@ -1,0 +1,80 @@
+# DiffusionDrive 本地环境备忘
+
+本文档只记录当前机器上用于 DiffusionDrive 本地 smoke test 的最小事实。
+
+## 环境
+
+- Conda 环境：`garage_2`
+- Python：通过 `conda run -n garage_2 python ...` 调用
+- 已确认包：
+  - `numpy 1.26.4`
+  - `torch 2.5.0+cu124`
+  - `timm 1.0.11`
+  - `einops 0.4.1`
+  - `diffusers 0.38.0`
+
+注意：安装 `diffusers` 时，`safetensors` 被更新为 `0.8.0rc0`。
+
+## 本地文件
+
+- Anchor：`/home/HeavenlySU/sitp_workspace/4-0-0-1910-tracked_clusters_anchor.npy`
+  - shape：`(99, 10, 2)`
+- Backbone：`/home/HeavenlySU/sitp_workspace/pytorch_model.bin`
+- Checkpoint：`/home/HeavenlySU/sitp_workspace/diffusiondrive_navsim_88p1_PDMS`
+
+## 已验证
+
+- config 自动推导：
+  - `num_anchor_modes = 99`
+  - `num_poses = 10`
+  - `time_horizon = 5.0`
+- 模型实例化通过：
+  - `plan_anchor = (99, 10, 2)`
+  - regression head 输出维度 `20 = 10 * 2`
+  - anchor encoder 输入维度 `640 = 10 * 64`
+- 随机输入 forward 通过：
+  - `trajectory = (1, 10, 2)`
+- checkpoint 部分加载 smoke 通过：
+  - `loaded 751 / 763`
+  - `missing 12`
+  - `unexpected 0`
+  - forward 后仍输出 `trajectory = (1, 10, 2)`
+- `DiffusionDriveAgent.setup()` smoke 通过：
+  - `matched 752 / 763`
+  - `shape mismatch = 11`
+  - `setup_ok cpu 99 10 (99, 10, 2)`
+- 伪输入 `run_step()` smoke 通过：
+  - camera feature：`(1, 3, 256, 1024)`
+  - LiDAR feature：`(1, 1, 256, 256)`
+  - status feature：`(1, 10)`
+  - trajectory：`(1, 10, 2)`
+- Bench2Drive mini 单样本 smoke 通过：
+  - 数据目录：`/home/HeavenlySU/sitp_workspace/carla_garage/Bench2Drive/Bench2Drive-mini-extracted`
+  - 测试 route：`AccidentTwoWays_Town12_Route1444_Weather0`
+  - 测试帧：`00100`
+  - 使用真实 `rgb_front`、真实 `.laz` LiDAR、真实 `anno`
+  - 脚本：`tools/smoke_diffusiondrive_b2d_mini.py`
+  - 命令：`conda run -n garage_2 python tools/smoke_diffusiondrive_b2d_mini.py`
+  - raw B2D mini 图像为 `900x1600`，脚本只用于 smoke：先 resize 到冻结的 CARLA-native sensor size `512x1024`，再走 `crop_array -> 256x1024`
+  - 从未来 `10` 个点构造 target：`(1, 10, 2)`
+  - 模型输出：`trajectory = (1, 10, 2)`
+  - 最近一次结果：`loss = 62.882957458496094`，`grad_norm = 0.6628270745277405`
+  - trajectory loss 为标量，backward 通过
+- Bench2Drive mini 训练入口 smoke 通过：
+  - 脚本：`team_code/train_diffusiondrive.py`
+  - 命令见 `docs/diffusiondrive_training.md`
+  - `Dataset samples: 2`
+  - `epoch=0 step=1 loss=252.6640`
+  - checkpoint：`/tmp/dd_train_smoke/smoke_clean/checkpoint_epoch000_step0000001.pth`
+
+手写模型 smoke 中的 12 个未加载 tensor 主要来自 LiDAR 输入通道、status 维度和旧 `20x8` / `8x3` trajectory head。真实 agent setup 使用当前 `GlobalConfig`，LiDAR 输入通道与 checkpoint 对齐，因此只剩 11 个 mismatch；这些均与当前 `99x10x2` 迁移预期一致。
+
+Bench2Drive mini smoke 中的 `10x2` target 是临时从原始 `anno` 的 `x/y/theta` 生成的，只用于验证读取、shape、loss 和 backward 链路；正式训练 target builder 仍需单独冻结。当前 `team_code/diffusiondrive/backbone.py` 已在本地 backbone 文件存在时优先加载本地权重，避免 smoke test 先访问 HuggingFace 再 fallback。
+
+## 常用环境变量
+
+```bash
+export DIFFUSIONDRIVE_ANCHOR_PATH=/home/HeavenlySU/sitp_workspace/4-0-0-1910-tracked_clusters_anchor.npy
+export DIFFUSIONDRIVE_BACKBONE_PATH=/home/HeavenlySU/sitp_workspace/pytorch_model.bin
+export DIFFUSIONDRIVE_CHECKPOINT=/home/HeavenlySU/sitp_workspace/diffusiondrive_navsim_88p1_PDMS
+```
