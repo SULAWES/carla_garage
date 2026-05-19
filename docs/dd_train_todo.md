@@ -2,7 +2,7 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-04-01
+**更新日期**: 2026-05-19
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
@@ -28,7 +28,10 @@
   - [ ] 明确是否保留独立 `extra_sensors` 分支，以及其输入组成
 
 - [ ] **训练标签与轨迹定义冻结**
+  - [ ] 修正 raw Bench2Drive `anno["theta"]` 到 CARLA ego yaw 的转换；当前 target builder 未做 `preprocess_compass()` 等价处理
+  - [ ] 用 `bounding_boxes[0]["world2ego"]` / ego pose 矩阵复核 `ego_relative_xy()`，并落盘 target 可视化/统计
   - [ ] 明确未来轨迹采样方式
+  - [ ] 明确 raw Bench2Drive frame 间隔、`future_stride`、`trajectory_sampling.interval_length`、anchor 时间间隔和 PID waypoint 时间间隔的一致关系
   - [ ] 明确 anchor 生成方式与数组形状
   - [x] 校验最新 `99x10x2` anchor 与源 JSON 一致，并记录直接升级路线，见 `diffusiondrive_anchor_adaptation.md`
   - [x] 明确 heading 不由轨迹 head 预测，主轨迹接口固定为 XY
@@ -36,6 +39,8 @@
 
 - [ ] **数据集生成规范**
   - [ ] 明确需要采哪些传感器
+  - [ ] 明确 raw Bench2Drive 传感器几何是否作为训练主线，还是重新采集 garage sensor suite 数据
+  - [ ] 明确 camera FOV / pose、LiDAR pose / yaw / range 与在线 agent 的一致性要求
   - [ ] 明确数据保存频率和时序长度
   - [ ] 明确训练 / 验证 / 测试切分方式
 
@@ -45,22 +50,33 @@
   - [x] 支持 trajectory loss-only 单机训练
   - [x] 用 Bench2Drive mini 跑通 1-step training smoke
 
+- [x] **第一版训练配置落盘**
+  - [x] 训练入口支持 optimizer / scheduler / warmup 配置
+  - [x] 训练入口支持 trajectory loss weights、focal alpha/gamma 和 diffusion timestep 配置
+  - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
+  - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
+  - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
+
 ### P1 级别（直接影响训练效果）
 
 - [ ] **`status_feature` 重定义**
   - [ ] 明确 command 维度和语义
+  - [ ] 明确训练使用当前 command 还是推理侧延迟一拍的 `commands[-2]`
   - [ ] 明确 velocity / acceleration 的取值方式
+  - [ ] 统一 acceleration：训练当前用 IMU `acceleration[0]`，推理当前用 speed finite difference
   - [ ] 明确是否做归一化
   - [ ] 明确 `status_feature` 和 `extra_sensors` 是否并存，还是合并为单一状态输入
 
 - [ ] **图像预处理方案验证**
   - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`
   - [x] 冻结第一阶段 CARLA-native 图像预处理主线：单前视、去底部裁剪、`[0,1]`、默认 JPEG artifact、无 ImageNet normalization
+  - [ ] 验证 raw Bench2Drive `1600x900, fov=70, camera x=0.8,z=1.6` resize 到 garage `512x1024, fov=110, camera x=-1.5,z=2.0` 是否可接受
   - [ ] 评估 JPEG artifact 是否需要保留
   - [ ] 评估是否需要 ImageNet mean/std normalization
   - [ ] 评估单前视与多相机的收益差异
 
 - [ ] **LiDAR 表征方案验证**
+  - [ ] 验证 raw Bench2Drive LiDAR `x=-0.39,z=1.84,yaw=0,range=85` 与 garage 在线 LiDAR `x=0,z=2.5,yaw=-90` 的训练/推理 gap
   - [ ] 明确是否始终使用多帧 LiDAR
   - [ ] 明确 histogram 参数是否沿用当前 garage 设置
   - [ ] 验证时序 realign 对训练标签的一致性
@@ -71,6 +87,12 @@
   - [x] 明确不在轨迹 head 中保留 heading；如后续需要 heading-aware 控制，另行设计监督与接口
   - [x] 明确新聚类结果直接作为 `99x10x2` 正式 anchor，不再重采样 / 截断为兼容格式
 
+- [ ] **loss / optimization 定标**
+  - [ ] 99 modes 下重新评估 focal alpha/gamma、`trajectory_cls_weight`、`trajectory_reg_weight`
+  - [ ] 评估外层 `trajectory_weight` 接入后总梯度尺度，记录 grad norm 和 loss breakdown
+  - [ ] 明确 image encoder 是否使用更小 LR / freeze BN / freeze backbone warmup
+  - [ ] 小 batch 训练前确认 BatchNorm 策略：frozen BN、SyncBN、或足够大的 effective batch
+
 ### P2 级别（训练后闭环增强）
 
 - [ ] **辅助头训练策略**
@@ -79,7 +101,13 @@
 
 - [ ] **评测与控制闭环设计**
   - [ ] 明确训练完成后继续用 waypoint PID 还是改控制器
+  - [ ] 若轨迹间隔采用 0.5s 或 1.0s，重写 `_control_pid()` 中 desired speed 的 waypoint 索引/时间差计算
   - [ ] 明确训练指标与 leaderboard 指标的对齐方式
+
+- [ ] **训练工程可复现性**
+  - [ ] `--resume-file` 当前只从 checkpoint 的下一个 epoch 继续，不恢复 dataloader epoch 内位置；长训前决定是否需要精确断点恢复
+  - [ ] 明确 full training 的 AMP / DDP / gradient accumulation 策略
+  - [ ] 给 full 数据 smoke 增加吞吐量、显存、grad norm、target 分布统计
 
 - [ ] **闭环调参与可观测性**
   - [ ] 调 `safety_box_*` 阈值，适配训练后模型的闭环行为
@@ -130,6 +158,32 @@
 - 提取后的 anchor 文件 shape 为 `99x10x2`
 
 这说明新的聚类结果已经可供训练侧使用；当前决策是直接将推理 / 训练接口升级到 `99x10x2`，而不是生成兼容版 `20x8x2`。
+
+#### 4. 2026-05-19 训练风险扫描结论
+
+本次扫描没有改代码，只对现有训练链路做静态检查和 mini 数据统计。结论是：full training 前不能只跑 smoke，需要先修正 target 坐标和时间语义，否则长训结果不可用。
+
+**最高优先级问题**：
+
+- `carla_native_dataset.py` 当前直接用 `anno["theta"]` 构造 `ego_relative_xy()`。但在线推理侧会先对 IMU compass 做 `preprocess_compass()`，等价于 `theta - pi/2`。在 Bench2Drive mini 上，当前 target 与 anno 中 ego `world2ego` 矩阵计算结果的误差约为：
+  - mean error: `17.05m`
+  - p95 error: `56.50m`
+  - 若先做 `theta - pi/2`，误差降到 mean `0.87m`、p95 `1.70m`
+- raw Bench2Drive frame 从 bbox 位移 / speed 估计约为 `0.1s` 间隔。当前 `future_stride=10` 更接近 `1.0s` 采样，而 DiffusionDrive config / anchor / 控制器仍按另一套 waypoint 时间语义工作。
+- raw Bench2Drive 传感器与 garage 在线 agent 传感器几何差异很大：
+  - Bench2Drive front camera: `1600x900, fov=70, x=0.8,z=1.6`
+  - garage front camera: `1024x512, fov=110, x=-1.5,z=2.0`
+  - Bench2Drive LiDAR: `x=-0.39,z=1.84,yaw=0,range=85`
+  - garage LiDAR: `x=0,z=2.5,yaw=-90`
+- `status_feature` 中 acceleration 当前训练/推理不一致。训练 helper 用 IMU `acceleration[0]`，推理 agent 用 speed finite difference；mini 上二者相关性约 `0.23`。
+- command 当前训练用 `command_far`，推理用 `commands[-2]`，存在一拍时序差异。
+
+**直接建议**：
+
+1. 先修 target builder，至少让 `ego_relative_xy()` 与 `world2ego` 矩阵在 mini/full smoke 上对齐。
+2. 冻结轨迹采样间隔：明确 `future_stride`、anchor interval、`trajectory_sampling.interval_length` 和 PID waypoint interval。
+3. 决定训练主线到底是 raw Bench2Drive 传感器几何，还是重采 garage sensor suite 数据；不要让 resize/crop 掩盖 FOV/pose gap。
+4. 再跑 full 数据小 smoke 和吞吐量测试。
 
 ---
 

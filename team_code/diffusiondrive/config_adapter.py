@@ -121,3 +121,38 @@ def validate_diffusiondrive_config(config: DiffusionDriveConfig) -> None:
             "DiffusionDrive LiDAR channels must be positive; "
             f"lidar_seq_len={config.lidar_seq_len}, use_ground_plane={config.use_ground_plane}."
         )
+
+    if config.diffusion_num_train_timesteps <= 0:
+        raise RuntimeError(
+            "DiffusionDrive diffusion_num_train_timesteps must be positive; "
+            f"got {config.diffusion_num_train_timesteps}."
+        )
+    if not (0 <= config.diffusion_train_timestep_min < config.diffusion_train_timestep_max):
+        raise RuntimeError(
+            "DiffusionDrive training timestep range must satisfy "
+            "0 <= min < max; "
+            f"got min={config.diffusion_train_timestep_min}, max={config.diffusion_train_timestep_max}."
+        )
+    if config.diffusion_train_timestep_max > config.diffusion_num_train_timesteps:
+        raise RuntimeError(
+            "DiffusionDrive diffusion_train_timestep_max must be <= diffusion_num_train_timesteps; "
+            f"got max={config.diffusion_train_timestep_max}, "
+            f"num_train_timesteps={config.diffusion_num_train_timesteps}."
+        )
+    if config.diffusion_infer_step_num <= 0:
+        raise RuntimeError(
+            "DiffusionDrive diffusion_infer_step_num must be positive; "
+            f"got {config.diffusion_infer_step_num}."
+        )
+    if config.diffusion_infer_timestep_span <= 0:
+        raise RuntimeError(
+            "DiffusionDrive diffusion_infer_timestep_span must be positive; "
+            f"got {config.diffusion_infer_timestep_span}."
+        )
+    if not (0 <= config.diffusion_infer_trunc_timesteps < config.diffusion_num_train_timesteps):
+        raise RuntimeError(
+            "DiffusionDrive diffusion_infer_trunc_timesteps must satisfy "
+            "0 <= trunc < diffusion_num_train_timesteps; "
+            f"got trunc={config.diffusion_infer_trunc_timesteps}, "
+            f"num_train_timesteps={config.diffusion_num_train_timesteps}."
+        )

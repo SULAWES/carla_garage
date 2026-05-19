@@ -88,11 +88,24 @@ class DiffusionDriveConfig:
     trajectory_weight: float = 12.0
     trajectory_cls_weight: float = 10.0
     trajectory_reg_weight: float = 8.0
+    trajectory_focal_alpha: float = 0.25
+    trajectory_focal_gamma: float = 2.0
     diff_loss_weight: float = 20.0
     agent_class_weight: float = 10.0
     agent_box_weight: float = 1.0
     bev_semantic_weight: float = 14.0
     use_ema: bool = False
+
+    # Diffusion trajectory sampling. These mirror the original NAVSIM defaults
+    # but are explicit here so CARLA training and inference runs are reproducible.
+    diffusion_num_train_timesteps: int = 1000
+    diffusion_beta_schedule: str = "scaled_linear"
+    diffusion_prediction_type: str = "sample"
+    diffusion_train_timestep_min: int = 0
+    diffusion_train_timestep_max: int = 50
+    diffusion_infer_step_num: int = 2
+    diffusion_infer_timestep_span: int = 20
+    diffusion_infer_trunc_timesteps: int = 8
 
     # BEV mapping (not used for CARLA inference)
     bev_semantic_classes: Dict[int, Any] = field(default_factory=dict)

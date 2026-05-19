@@ -392,12 +392,13 @@ class TrajectoryHead(nn.Module):
         self._num_poses = num_poses
         self._d_model = d_model
         self._d_ffn = d_ffn
-        self.diff_loss_weight = 2.0
+        self._config = config
+        self.diff_loss_weight = config.diff_loss_weight
 
         self.diffusion_scheduler = DDIMScheduler(
-            num_train_timesteps=1000,
-            beta_schedule="scaled_linear",
-            prediction_type="sample",
+            num_train_timesteps=config.diffusion_num_train_timesteps,
+            beta_schedule=config.diffusion_beta_schedule,
+            prediction_type=config.diffusion_prediction_type,
         )
 
 
@@ -450,10 +451,9 @@ class TrajectoryHead(nn.Module):
         return torch.cat([odo_info_fut_x, odo_info_fut_y], dim=-1)
     def forward(self, ego_query, agents_query, bev_feature,bev_spatial_shape,status_encoding, targets=None,global_img=None) -> Dict[str, torch.Tensor]:
         """Torch module forward pass."""
-        if self.training:
+        if targets is not None:
             return self.forward_train(ego_query, agents_query, bev_feature,bev_spatial_shape,status_encoding,targets,global_img)
-        else:
-            return self.forward_test(ego_query, agents_query, bev_feature,bev_spatial_shape,status_encoding,global_img)
+        return self.forward_test(ego_query, agents_query, bev_feature,bev_spatial_shape,status_encoding,global_img)
 
 
     def forward_train(self, ego_query,agents_query,bev_feature,bev_spatial_shape,status_encoding, targets=None,global_img=None) -> Dict[str, torch.Tensor]:
@@ -462,8 +462,10 @@ class TrajectoryHead(nn.Module):
         # 1. add truncated noise to the plan anchor
         plan_anchor = self.plan_anchor.unsqueeze(0).repeat(bs,1,1,1)
         odo_info_fut = self.norm_odo(plan_anchor)
+        timestep_min = int(self._config.diffusion_train_timestep_min)
+        timestep_max = int(self._config.diffusion_train_timestep_max)
         timesteps = torch.randint(
-            0, 50,
+            timestep_min, timestep_max,
             (bs,), device=device
         )
         noise = torch.randn(odo_info_fut.shape, device=device)
@@ -502,11 +504,13 @@ class TrajectoryHead(nn.Module):
         return {"trajectory": best_reg,"trajectory_loss":ret_traj_loss,"trajectory_loss_dict":trajectory_loss_dict}
 
     def forward_test(self, ego_query,agents_query,bev_feature,bev_spatial_shape,status_encoding,global_img) -> Dict[str, torch.Tensor]:
-        step_num = 2
+        step_num = int(self._config.diffusion_infer_step_num)
+        if step_num <= 0:
+            raise RuntimeError(f"diffusion_infer_step_num must be positive, got {step_num}.")
         bs = ego_query.shape[0]
         device = ego_query.device
-        self.diffusion_scheduler.set_timesteps(1000, device)
-        step_ratio = 20 / step_num
+        self.diffusion_scheduler.set_timesteps(self._config.diffusion_num_train_timesteps, device)
+        step_ratio = self._config.diffusion_infer_timestep_span / step_num
         roll_timesteps = (np.arange(0, step_num) * step_ratio).round()[::-1].copy().astype(np.int64)
         roll_timesteps = torch.from_numpy(roll_timesteps).to(device)
 
@@ -515,7 +519,7 @@ class TrajectoryHead(nn.Module):
         plan_anchor = self.plan_anchor.unsqueeze(0).repeat(bs,1,1,1)
         img = self.norm_odo(plan_anchor)
         noise = torch.randn(img.shape, device=device)
-        trunc_timesteps = torch.ones((bs,), device=device, dtype=torch.long) * 8
+        trunc_timesteps = torch.ones((bs,), device=device, dtype=torch.long) * self._config.diffusion_infer_trunc_timesteps
         img = self.diffusion_scheduler.add_noise(original_samples=img, noise=noise, timesteps=trunc_timesteps)
         noisy_trajs = self.denorm_odo(img)
         ego_fut_mode = img.shape[1]

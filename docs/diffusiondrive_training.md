@@ -11,7 +11,22 @@
   - `lidar/*.laz`
   - `anno/*.json.gz`
 
-第一版只训练 trajectory head 主路径，loss 来自模型输出的 `trajectory_loss`。当前不接入 `agent_states / agent_labels / bev_semantic_map` 辅助 loss。
+当前只训练 trajectory head 主路径。模型输出的 `trajectory_loss` 是 trajectory head 内部的未加外层权重损失；训练脚本会再乘 `DiffusionDriveConfig.trajectory_weight` 得到反传用的总 loss。当前不接入 `agent_states / agent_labels / bev_semantic_map` 辅助 loss。
+
+训练入口会在输出目录写入：
+
+- `training_config.json`：CLI 参数、DiffusionDrive config、数据 split、预处理和 status feature schema
+- `checkpoint_epoch*_step*.pth`：周期或结束 checkpoint
+- `latest.pth`：最近一次保存的 checkpoint，供 `--resume-file` 使用
+
+可配置项已经覆盖第一阶段 full training 需要的基础参数：
+
+- optimizer：`--optimizer adamw`、`--lr`、`--weight-decay`
+- scheduler：`--scheduler none|cosine|multistep`、`--warmup-steps`、`--lr-steps`、`--lr-gamma`、`--min-lr`；其中 `--lr-steps` 是按 optimizer step 计数的逗号分隔 milestone
+- loss：`--trajectory-weight`、`--trajectory-cls-weight`、`--trajectory-reg-weight`、`--trajectory-focal-alpha`、`--trajectory-focal-gamma`
+- diffusion：`--diffusion-num-train-timesteps`、`--diffusion-train-timestep-min/max`、`--diffusion-infer-step-num`、`--diffusion-infer-timestep-span`、`--diffusion-infer-trunc-timesteps`
+- data split：`--val-root-dir`、`--val-route-glob`、`--val-frame-sampling`、`--val-max-samples`、`--val-every-steps`、`--max-val-steps`
+- preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 
 ## 本机 mini smoke
 
@@ -33,10 +48,53 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 最近一次 smoke 结果：
 
 - `Dataset samples: 2`
-- `epoch=0 step=1 loss=252.6640`
+- `epoch=0 step=1 loss=3031.9680`
+- `trajectory_unweighted=252.6640`
 - `trajectory_loss_0=126.4926`
 - `trajectory_loss_1=126.1714`
-- checkpoint：`/tmp/dd_train_smoke/smoke/checkpoint_epoch000_step0000001.pth`
+- checkpoint：`/tmp/dd_train_smoke_config/smoke/checkpoint_epoch000_step0000001.pth`
+
+带验证集 smoke：
+
+```bash
+cd /home/HeavenlySU/sitp_workspace/carla_garage
+conda run -n garage_2 python team_code/train_diffusiondrive.py \
+  --root-dir Bench2Drive/Bench2Drive-mini-extracted \
+  --val-root-dir Bench2Drive/Bench2Drive-mini-extracted \
+  --logdir /tmp/dd_train_smoke_config \
+  --id smoke_val \
+  --epochs 1 \
+  --batch-size 1 \
+  --max-samples 2 \
+  --max-steps 1 \
+  --val-max-samples 1 \
+  --max-val-steps 1 \
+  --val-every-steps 1 \
+  --frame-sampling 20 \
+  --num-workers 0 \
+  --load-file ""
+```
+
+最近一次验证输出：
+
+- `validation step=1 loss=3079.8933`
+- `trajectory_unweighted=256.6578`
+
+resume 示例：
+
+```bash
+conda run -n garage_2 python team_code/train_diffusiondrive.py \
+  --root-dir Bench2Drive/Bench2Drive-mini-extracted \
+  --logdir /tmp/dd_train_smoke_config \
+  --id smoke_resume \
+  --epochs 2 \
+  --batch-size 1 \
+  --max-samples 2 \
+  --max-steps 2 \
+  --frame-sampling 20 \
+  --num-workers 0 \
+  --resume-file /tmp/dd_train_smoke_config/smoke_val/latest.pth
+```
 
 ## Full 数据集示例
 
@@ -50,7 +108,10 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
   --epochs 20 \
   --batch-size 4 \
   --frame-sampling 5 \
-  --num-workers 8
+  --num-workers 8 \
+  --scheduler cosine \
+  --warmup-steps 1000 \
+  --save-every-steps 1000
 ```
 
 如需从 NAVSIM checkpoint 初始化：
@@ -67,4 +128,5 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 - 未来轨迹 target 暂时从 `anno` 的 `x/y/theta` 直接构造 `10x2` XY 轨迹。
 - 暂不支持 distributed / AMP / EMA。
 - 暂不训练 auxiliary heads。
+- `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。
 - `status_feature` 仍沿用当前定义：`command(6) + velocity(2) + acceleration(2)`；其中 lateral velocity / acceleration 暂置 0。

@@ -121,6 +121,8 @@ class LossComputer(nn.Module):
         # self.focal_loss = FocalLoss(use_sigmoid=True, gamma=2.0, alpha=0.25, reduction='mean', loss_weight=1.0, activated=False)
         self.cls_loss_weight = config.trajectory_cls_weight
         self.reg_loss_weight = config.trajectory_reg_weight
+        self.focal_alpha = config.trajectory_focal_alpha
+        self.focal_gamma = config.trajectory_focal_gamma
     def forward(self, poses_reg, poses_cls, targets, plan_anchor):
         """
         pred_traj: (bs, num_modes, num_poses, 2)
@@ -156,8 +158,8 @@ class LossComputer(nn.Module):
             poses_cls,
             target_classes_onehot,
             weight=None,
-            gamma=2.0,
-            alpha=0.25,
+            gamma=self.focal_gamma,
+            alpha=self.focal_alpha,
             reduction='mean',
             avg_factor=None
         )

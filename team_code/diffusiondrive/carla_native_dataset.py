@@ -30,11 +30,15 @@ class Bench2DriveDiffusionDataset(Dataset):
         frame_sampling: int = 1,
         max_samples: Optional[int] = None,
         route_glob: str = "*",
+        model_image_size: tuple[int, int] = (256, 1024),
+        jpeg_artifact: bool = True,
     ) -> None:
         self.config = config
         self.num_poses = num_poses
         self.future_stride = future_stride
         self.frame_sampling = frame_sampling
+        self.model_image_size = model_image_size
+        self.jpeg_artifact = jpeg_artifact
         self.samples = self._discover_samples(root_dirs, route_glob, max_samples)
         if not self.samples:
             roots = ", ".join(str(root) for root in root_dirs)
@@ -48,7 +52,13 @@ class Bench2DriveDiffusionDataset(Dataset):
         annotation = load_annotation(route_dir, frame)
         return {
             "features": {
-                "camera_feature": build_camera_feature(route_dir, frame, self.config),
+                "camera_feature": build_camera_feature(
+                    route_dir,
+                    frame,
+                    self.config,
+                    model_image_size=self.model_image_size,
+                    jpeg_artifact=self.jpeg_artifact,
+                ),
                 "lidar_feature": build_lidar_feature(route_dir, frame, self.config),
                 "status_feature": build_status_feature(annotation),
             },
@@ -112,7 +122,13 @@ def load_annotation(route_dir: Path, frame: int) -> dict:
         return json.load(file)
 
 
-def build_camera_feature(route_dir: Path, frame: int, config: GlobalConfig) -> torch.Tensor:
+def build_camera_feature(
+    route_dir: Path,
+    frame: int,
+    config: GlobalConfig,
+    model_image_size: tuple[int, int] = (256, 1024),
+    jpeg_artifact: bool = True,
+) -> torch.Tensor:
     image_path = route_dir / "camera" / "rgb_front" / f"{frame:05d}.jpg"
     camera_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if camera_bgr is None:
@@ -121,15 +137,16 @@ def build_camera_feature(route_dir: Path, frame: int, config: GlobalConfig) -> t
     # Raw B2D images are commonly 900x1600. For the CARLA-native baseline,
     # map them into the online sensor size before applying the online crop.
     camera_bgr = cv2.resize(camera_bgr, (config.camera_width, config.camera_height), interpolation=cv2.INTER_LINEAR)
-    _, encoded = cv2.imencode(".jpg", camera_bgr)
-    camera_bgr = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
+    if jpeg_artifact:
+        _, encoded = cv2.imencode(".jpg", camera_bgr)
+        camera_bgr = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
     camera_rgb = cv2.cvtColor(camera_bgr, cv2.COLOR_BGR2RGB)
     camera_rgb = t_u.crop_array(config, camera_rgb)
     camera_chw = np.transpose(camera_rgb, (2, 0, 1))
     camera_tensor = torch.from_numpy(camera_chw).float().unsqueeze(0) / 255.0
     camera_tensor = torch.nn.functional.interpolate(
         camera_tensor,
-        size=(256, 1024),
+        size=model_image_size,
         mode="bilinear",
         align_corners=False,
     )
