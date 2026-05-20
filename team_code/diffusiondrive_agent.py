@@ -29,6 +29,7 @@ import transfuser_utils as t_u
 
 from diffusiondrive.config_adapter import DiffusionDriveRuntimeOverrides, build_diffusiondrive_config
 from diffusiondrive.model import V2TransfuserModel
+from diffusiondrive.status import build_status_feature
 from birds_eye_view.run_stop_sign import RunStopSign
 
 
@@ -112,7 +113,6 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.filter_initialized = False
         self.state_log = deque(maxlen=max((self.config.lidar_seq_len * self.config.data_save_freq), 2))
 
-        self.prev_speed = None
         self.stuck_detector = 0
         self.force_move = 0
         self.stop_sign_controller = int(os.environ.get("STOP_CONTROL", 1))
@@ -407,17 +407,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         return rgb
 
     def _build_status(self, tick_data):
-        speed = tick_data['speed'].item()
-        if self.prev_speed is None:
-            accel = 0.0
-        else:
-            accel = (speed - self.prev_speed) / self.config.carla_frame_rate
-        self.prev_speed = speed
-
-        vel = torch.tensor([[speed, 0.0]], device=self.device, dtype=torch.float32)
-        acc = torch.tensor([[accel, 0.0]], device=self.device, dtype=torch.float32)
-        status = torch.cat([tick_data['command'], vel, acc], dim=1)
-        return status
+        return build_status_feature(tick_data['command'], tick_data['speed'], device=self.device)
 
     def _control_pid(self, waypoints, speed):
         waypoints = waypoints[0].detach().cpu().numpy()

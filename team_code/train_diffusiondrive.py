@@ -22,6 +22,7 @@ from diffusiondrive.config_adapter import (
     validate_diffusiondrive_config,
 )
 from diffusiondrive.model import V2TransfuserModel
+from diffusiondrive.status import STATUS_FEATURE_SCHEMA
 
 
 CHECKPOINT_WRAPPER_PREFIXES = ("agent", "model", "module", "_transfuser_model")
@@ -47,6 +48,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-sampling", type=int, default=5)
     parser.add_argument("--val-frame-sampling", type=int, default=None)
     parser.add_argument("--future-stride", type=int, default=10)
+    parser.add_argument("--dataset-mode", default="b2d_full_raw")
+    parser.add_argument("--assumed-frame-interval", type=float, default=0.1)
+    parser.add_argument("--b2d-source-image-height", type=int, default=900)
+    parser.add_argument("--b2d-source-image-width", type=int, default=1600)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--val-max-samples", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
@@ -152,10 +157,15 @@ def make_json_safe(value: Any) -> Any:
 
 
 def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: GlobalConfig, dd_config: Any) -> None:
+    anchor_shape = None
+    if dd_config.plan_anchor_path and Path(dd_config.plan_anchor_path).is_file():
+        anchor_shape = list(np.load(dd_config.plan_anchor_path, mmap_mode="r").shape)
+
     run_config = {
         "args": make_json_safe(vars(args)),
         "diffusiondrive": make_json_safe(asdict(dd_config)),
         "data": {
+            "dataset_mode": args.dataset_mode,
             "train_root_dir": make_json_safe(args.root_dir),
             "val_root_dir": make_json_safe(args.val_root_dir),
             "route_glob": args.route_glob,
@@ -166,7 +176,49 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "max_samples": args.max_samples,
             "val_max_samples": args.val_max_samples,
         },
+        "time_semantics": {
+            "assumed_frame_interval_seconds": args.assumed_frame_interval,
+            "future_stride_frames": args.future_stride,
+            "target_interval_seconds": args.future_stride * args.assumed_frame_interval,
+            "trajectory_sampling_interval_seconds": dd_config.trajectory_sampling.interval_length,
+            "trajectory_sampling_num_poses": dd_config.trajectory_sampling.num_poses,
+            "trajectory_sampling_time_horizon_seconds": dd_config.trajectory_sampling.time_horizon,
+            "anchor_interval_seconds_assumption": dd_config.trajectory_sampling.interval_length,
+        },
+        "anchor": {
+            "path": dd_config.plan_anchor_path,
+            "shape": anchor_shape,
+            "num_modes": dd_config.num_anchor_modes,
+        },
+        "sensor_contract": {
+            "dataset_mode": args.dataset_mode,
+            "source": "Bench2Drive Full raw route directories",
+            "source_image_size": [args.b2d_source_image_height, args.b2d_source_image_width],
+            "source_front_camera": {
+                "size": [args.b2d_source_image_height, args.b2d_source_image_width],
+                "fov": 70,
+                "location": [0.8, 0.0, 1.6],
+            },
+            "source_lidar": {
+                "location": [-0.39, 0.0, 1.84],
+                "yaw_degrees": 0,
+                "range_meters": 85,
+            },
+            "online_garage_front_camera": {
+                "size": [global_config.camera_height, global_config.camera_width],
+                "fov": global_config.camera_fov,
+                "location": global_config.camera_pos,
+            },
+            "online_garage_lidar": {
+                "location": global_config.lidar_pos,
+                "rotation": global_config.lidar_rot,
+                "lidar_resolution": [global_config.lidar_resolution_height, global_config.lidar_resolution_width],
+                "pixels_per_meter": global_config.pixels_per_meter,
+            },
+            "known_gap": "B2D Full raw camera/LiDAR geometry is not identical to the online garage sensor suite.",
+        },
         "preprocessing": {
+            "source_image_size": [args.b2d_source_image_height, args.b2d_source_image_width],
             "online_sensor_size": [global_config.camera_height, global_config.camera_width],
             "crop_image": global_config.crop_image,
             "cropped_size": [global_config.cropped_height, global_config.cropped_width],
@@ -176,7 +228,7 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "jpeg_artifact": not args.no_jpeg_artifact,
         },
         "status_feature": {
-            "schema": "command_one_hot(6)+velocity(speed,0)+acceleration(accel_x,0)",
+            "schema": STATUS_FEATURE_SCHEMA,
             "dim": dd_config.status_dim,
             "normalized": False,
         },

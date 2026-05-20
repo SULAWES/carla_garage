@@ -15,6 +15,7 @@ import torch
 from torch.utils.data import Dataset
 
 from config import GlobalConfig
+from diffusiondrive.status import build_status_feature_from_command
 import transfuser_utils as t_u
 
 
@@ -194,13 +195,8 @@ def lidar_to_histogram_features(lidar: np.ndarray, config: GlobalConfig) -> np.n
 
 def build_status_feature(annotation: dict) -> torch.Tensor:
     command = int(annotation.get("command_far", annotation.get("command_near", 4)))
-    command_one_hot = torch.from_numpy(t_u.command_to_one_hot(command)).float()
     speed = float(annotation["speed"])
-    acceleration = annotation.get("acceleration", [0.0, 0.0, 0.0])
-    accel_x = float(acceleration[0]) if acceleration else 0.0
-    velocity_tensor = torch.tensor([speed, 0.0], dtype=torch.float32)
-    accel_tensor = torch.tensor([accel_x, 0.0], dtype=torch.float32)
-    return torch.cat([command_one_hot, velocity_tensor, accel_tensor], dim=0)
+    return build_status_feature_from_command(command, speed)
 
 
 def build_trajectory_target(route_dir: Path, frame: int, num_poses: int, stride: int) -> torch.Tensor:

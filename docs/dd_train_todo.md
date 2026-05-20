@@ -9,11 +9,12 @@
 - 因此训练侧优先级高于继续对齐 navsim checkpoint 语义
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
-- 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
+- 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中的 `extra_sensors` 是可选分支：按配置拼接 `velocity(1)` 与 / 或 `discrete_command(6)`，再经 `extra_sensor_encoder` 编码
-- `syb_carla_garage` 里的 `extra_sensors` 关键设计是 `speed(1) + command_one_hot(6)`，并作为低维条件 token 接入 transformer decoder；这个思想应吸收到 DiffusionDrive 的 `status_feature`，但不建议在 DD 中额外保留一套独立 `extra_sensors` 分支
+- `syb_carla_garage` 里的 `extra_sensors` 关键设计是 `speed(1) + command_one_hot(6)`，并作为低维条件 token 接入 transformer decoder；这个思想已吸收到 DiffusionDrive 的 `status_feature`，但不在 DD 中额外保留一套独立 `extra_sensors` 分支
 - 当前新提取的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 语义为 `99x10x2`
 - 其来源 JSON 中每个 cluster 的 `mu` 都是一条拉直后的 `10` 个路点 `(x, y)` 轨迹，即一个 `20D` 向量
+- 当前训练和后续修改以 Bench2Drive Full raw 数据为主训练分布；sensor / time / preprocessing contract 见 `b2d_full_sensor_contract.md`
 
 ---
 
@@ -25,10 +26,10 @@
   - [x] 明确相机输入方案：第一阶段采用 CARLA-native 单前视，不采用 NAVSIM 三相机拼接
   - [x] 明确图像裁剪 / resize / normalize 方案：`512x1024 -> crop_array 384x1024 -> resize 256x1024 -> [0,1]`，默认无 ImageNet normalization
   - [x] 明确 LiDAR 输入通道定义：沿用 garage histogram，默认 `use_ground_plane=False`，每帧 `1` 个 above-split 通道；多帧时按 `lidar_seq_len` 拼接
-  - [x] 记录当前 `status_feature` 事实：`command_one_hot(6) + velocity(speed,0) + acceleration(accel_x,0)`，共 `10` 维
+  - [x] 记录旧 `status_feature` 事实：`command_one_hot(6) + velocity(speed,0) + acceleration(accel_x,0)`，共 `10` 维
   - [x] 记录 `extra_sensors` 来源：garage / syb 旧模型中为 `speed(1) + command_one_hot(6)` 的低维条件 token
-  - [x] 明确 DiffusionDrive 不新增独立 `extra_sensors` 分支；后续将其思想合并进 `status_feature`
-  - [ ] 将 `status_feature` 迁移到推荐的 `command_one_hot(6) + speed(1)`，共 `7` 维
+  - [x] 明确 DiffusionDrive 不新增独立 `extra_sensors` 分支；将其思想合并进 `status_feature`
+  - [x] 将 `status_feature` 迁移到推荐的 `command_one_hot(6) + speed(1)`，共 `7` 维
 
 - [ ] **训练标签与轨迹定义冻结**
   - [x] 修正 raw Bench2Drive target 坐标系：优先使用 ego vehicle `world2ego` 矩阵，缺失时 fallback 到 `preprocess_compass()` 等价处理后的 `x/y/theta`
@@ -41,9 +42,10 @@
   - [x] 明确采用新聚类 anchor：`99` 个 mode，每个 mode 对应 `10x2` 轨迹点
 
 - [ ] **数据集生成规范**
-  - [ ] 明确需要采哪些传感器
-  - [ ] 明确 raw Bench2Drive 传感器几何是否作为训练主线，还是重新采集 garage sensor suite 数据
-  - [ ] 明确 camera FOV / pose、LiDAR pose / yaw / range 与在线 agent 的一致性要求
+  - [x] 明确当前训练主线以 B2D Full raw 数据为主，不把它仅作为 smoke / 预训练材料
+  - [x] 初步记录 B2D Full raw camera / LiDAR sensor contract，见 `b2d_full_sensor_contract.md`
+  - [ ] 明确 B2D Full raw sensor 与在线 `DiffusionDriveAgent` sensor suite 的 gap 是否需要在推理侧对齐或单独做 domain adaptation
+  - [ ] 明确 camera FOV / pose、LiDAR pose / yaw / range 与在线 agent 的一致性验证标准
   - [ ] 明确数据保存频率和时序长度
   - [ ] 明确训练 / 验证 / 测试切分方式
 
@@ -58,23 +60,25 @@
   - [x] 训练入口支持 trajectory loss weights、focal alpha/gamma 和 diffusion timestep 配置
   - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
+  - [x] `training_config.json` 记录 B2D Full dataset mode、frame interval 假设、target interval、anchor shape 和 sensor contract
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
 
 ### P1 级别（直接影响训练效果）
 
 - [ ] **`status_feature` 重定义**
   - [x] 明确当前 command 维度为 CARLA `command_one_hot(6)`
-  - [x] 明确 syb / garage `extra_sensors` 对应的是 `speed(1) + command_one_hot(6)`，不是 DD 当前的 `10` 维 status
+  - [x] 明确 syb / garage `extra_sensors` 对应的是 `speed(1) + command_one_hot(6)`，不是 DD 旧实现的 `10` 维 status
   - [x] 明确设计方向：DD 只保留 `status_feature` 入口，不额外引入旧模型式独立 `extra_sensors` 分支
-  - [ ] 实现推荐 schema：`status_feature_v2 = command_one_hot(6) + speed(1)`
+  - [x] 实现推荐 schema：`status_feature = command_one_hot(6) + speed(1)`
   - [ ] 明确训练使用当前 command 还是推理侧延迟一拍的 `commands[-2]`
-  - [ ] 将训练侧和推理侧改为共用同一份 status builder，避免 schema 分叉
-  - [ ] 迁移时删除 / 废弃 acceleration 输入；当前训练用 IMU `acceleration[0]`、推理用 speed finite difference，二者不一致
+  - [x] 将训练侧和推理侧改为共用同一份 status builder，避免 schema 分叉
+  - [x] 迁移时删除 / 废弃 acceleration 输入；旧实现中训练用 IMU `acceleration[0]`、推理用 speed finite difference，二者不一致
   - [ ] 明确 speed 是否归一化；syb 旧模型通过 `BatchNorm1d(1, affine=False)` 处理速度，DD 迁移时需要单独决策
 
 - [ ] **图像预处理方案验证**
   - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`
   - [x] 冻结第一阶段 CARLA-native 图像预处理主线：单前视、去底部裁剪、`[0,1]`、默认 JPEG artifact、无 ImageNet normalization
+  - [x] 明确 B2D Full raw 是当前主训练分布，见 `b2d_full_sensor_contract.md`
   - [ ] 验证 raw Bench2Drive `1600x900, fov=70, camera x=0.8,z=1.6` resize 到 garage `512x1024, fov=110, camera x=-1.5,z=2.0` 是否可接受
   - [ ] 评估 JPEG artifact 是否需要保留
   - [ ] 评估是否需要 ImageNet mean/std normalization
@@ -180,7 +184,7 @@
   - garage front camera: `1024x512, fov=110, x=-1.5,z=2.0`
   - Bench2Drive LiDAR: `x=-0.39,z=1.84,yaw=0,range=85`
   - garage LiDAR: `x=0,z=2.5,yaw=-90`
-- `status_feature` 中 acceleration 当前训练/推理不一致。训练 helper 用 IMU `acceleration[0]`，推理 agent 用 speed finite difference；mini 上二者相关性约 `0.23`。
+- 旧 `status_feature` 中 acceleration 训练/推理不一致。训练 helper 用 IMU `acceleration[0]`，推理 agent 用 speed finite difference；mini 上二者相关性约 `0.23`。当前已移除 acceleration 输入。
 - command 当前训练用 `command_far`，推理用 `commands[-2]`，存在一拍时序差异。
 
 **直接建议**：
@@ -198,18 +202,19 @@
 
 **问题描述**：
 
-既然后续计划在 CARLA 上重新训练，那么当前推理侧的 `status_feature` 不应被视为最终答案，而应在训练前重新定义。这里最容易混淆的是：DiffusionDrive 当前的 `status_feature` 和 garage / syb 旧模型里的 `extra_sensors` 不是同一个接口。
+既然后续计划在 CARLA 上重新训练，推理侧的 `status_feature` 已按当前训练主线重新定义。这里最容易混淆的是：DiffusionDrive 当前的 `status_feature` 和 garage / syb 旧模型里的 `extra_sensors` 不是同一个接口。
 
 **至少要明确**：
 
 - command 用几维，以及训练 command 是否要模拟推理侧 `commands[-2]` 延迟
 - speed 是否归一化
-- 是否保留 acceleration
-- 是否把 syb / garage `extra_sensors` 的 7 维设计吸收到 DD 的 `status_feature`
+- acceleration 已移除
+- syb / garage `extra_sensors` 的 7 维设计已吸收到 DD 的 `status_feature`
 
 **当前代码事实**：
 
-- `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
+- `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
+- 训练侧与推理侧共用 `diffusiondrive.status` 中的 status builder
 - `carla_garage/team_code/model.py` 中的 `extra_sensors` 则是另一套可选输入分支：
   - 若 `use_velocity=True`，加入 `velocity_normalization(ego_vel)`，贡献 `1` 维
   - 若 `use_discrete_command=True`，加入 `command`，贡献 `6` 维
@@ -219,7 +224,7 @@
 
 **结论**：
 
-推荐方向是：DiffusionDrive 只保留 `status_feature` 入口，不新增独立 `extra_sensors` 分支；把 syb / garage `extra_sensors` 的核心设计吸收到 `status_feature_v2 = command_one_hot(6) + speed(1)`。这会把当前 `10` 维 status 改成 `7` 维，`_status_encoding` 需要重建，旧 checkpoint 中这一层按 shape mismatch 跳过即可。
+当前方向是：DiffusionDrive 只保留 `status_feature` 入口，不新增独立 `extra_sensors` 分支；把 syb / garage `extra_sensors` 的核心设计吸收到 `status_feature = command_one_hot(6) + speed(1)`。这会把旧 `10` 维 status 改成 `7` 维，`_status_encoding` 需要重建，旧 checkpoint 中这一层按 shape mismatch 跳过即可。
 
 ### 2. 相机输入方案需要冻结
 

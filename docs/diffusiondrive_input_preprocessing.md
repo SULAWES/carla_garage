@@ -88,17 +88,19 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 
 ## 当前结论
 
-1. CARLA 原生训练第一阶段正式冻结为 CARLA-native 单前视方案：
+1. 当前训练主线以 Bench2Drive Full raw 数据为主要训练分布，sensor contract 见 `b2d_full_sensor_contract.md`。模型输入仍保持单前视方案：
    - 单前视相机
-   - 传感器分辨率 `512x1024`
+   - B2D Full raw 图像通常为 `900x1600`
+   - 当前先 resize 到在线 garage sensor size `512x1024`
    - `crop_array(): 512x1024 -> 384x1024`
    - resize 到 DiffusionDrive 模型输入 `256x1024`
    - 输入数值范围 `[0, 1]`
    - 默认不做 ImageNet mean/std normalization
-   - 默认保留 JPEG artifact，使训练侧和当前 leaderboard 在线推理路径一致
+   - 默认保留 JPEG artifact
 
-2. 训练和推理必须共用同一套预处理语义。后续新增训练脚本时，训练侧应直接复用或镜像 `DiffusionDriveAgent` 当前相机路径：
+2. 训练和推理应尽量共用同一套模型输入预处理语义，但必须显式记录 B2D Full raw sensor 与在线 garage sensor suite 的几何 gap。当前训练侧镜像 `DiffusionDriveAgent` 的模型输入路径：
    - `BGR -> RGB`
+   - raw `900x1600 -> 512x1024`
    - `crop_array(): 512x1024 -> 384x1024`
    - resize 到 `256x1024`
    - `/255.0`
@@ -122,13 +124,13 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 
 - 第一阶段正式继续单前视，不升级到 NAVSIM 式三相机拼接。
 - 第一阶段保持当前 CARLA / garage 去底部裁剪，不改成 NAVSIM 上下裁剪。
-- CARLA 重新训练第一阶段保留 JPEG artifact，和当前在线推理默认路径一致。
+- B2D Full 训练第一阶段保留 JPEG artifact，和当前在线推理默认路径一致。
 - CARLA 重新训练第一阶段不引入 ImageNet mean/std normalization。
 
 ## 后续工程项
 
 - 训练数据加载、在线推理和可视化调试是否共用同一份预处理 helper，减少未来分叉。
-- 若使用原始 Bench2Drive mini/full 数据，不能直接套用 `900x1600 -> crop_array()` 作为最终训练规范；需要先转换/采集到与在线 CARLA sensor 一致的 `512x1024` 单前视输入，或显式定义一套 raw Bench2Drive 到 CARLA-native 输入的转换规则。
+- B2D Full raw 是当前主训练分布；不能把 `900x1600 -> 512x1024 -> crop_array()` 视作几何等价于在线 sensor suite，只能视作当前明确记录的输入转换规则。
 
 ## 最小测试计划
 

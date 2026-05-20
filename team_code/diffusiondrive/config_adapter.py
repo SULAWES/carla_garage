@@ -98,7 +98,7 @@ def validate_diffusiondrive_config(config: DiffusionDriveConfig) -> None:
             f"got last dimension {plan_anchor.shape[2]}."
         )
 
-    expected_status_dim = config.command_dim + config.velocity_dim + config.accel_dim
+    expected_status_dim = config.command_dim + config.speed_dim
     if config.status_dim != expected_status_dim:
         raise RuntimeError(
             f"DiffusionDrive status_dim mismatch: got {config.status_dim}, expected {expected_status_dim}."

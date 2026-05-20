@@ -7,9 +7,9 @@
 
 - 当前代码状态以 `carla_garage/team_code/diffusiondrive_agent.py` 为准
 - 旧版问题分析已移入 `docs/outdated/`
-- `status_feature` 暂不作为近期对齐项，因为后续计划在 CARLA 上重新训练
+- `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
 - 需要区分两套机制：
-- `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
+- `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
 
 ---
@@ -247,9 +247,9 @@
 
 **补充说明**：
 
-- 当前 `DiffusionDriveAgent` 文档应继续按 `command(6) + velocity(2) + acceleration(2)` 描述 `status_feature`
+- 当前 `DiffusionDriveAgent` 文档应按 `command_one_hot(6) + speed(1)` 描述 `status_feature`
 - `extra_sensors` 是 `carla_garage/team_code/model.py` 中的另一套可选输入机制：若开启，会将 `velocity(1)` 和 / 或 `discrete_command(6)` 拼接后送入 `extra_sensor_encoder`
-- 因此后续训练设计里需要明确：是只保留 `status_feature`，还是同时引入独立 `extra_sensors` 分支
+- 因此后续训练设计里已明确：只保留 `status_feature`，不额外引入独立 `extra_sensors` 分支
 
 ### 5. 轨迹表示已明确为 `99x10x2`
 
@@ -332,16 +332,16 @@
 
 **当前决策**：
 
-暂时不作为近期任务。
+已按 CARLA 重训主线处理。
 
 **原因**：
 
 - 当前计划是在 CARLA 上重新训练
-- 现阶段没必要为了对齐 navsim checkpoint 去专门重构 `status_feature`
+- 因此 `status_feature` 直接采用 `command_one_hot(6) + speed(1)`，旧 checkpoint 的 `_status_encoding` shape mismatch 按预期跳过
 
 **结论**：
 
-后续如果进入训练阶段，应直接以 CARLA 训练配置重新定义并固定这部分输入，而不是围绕现有 navsim checkpoint 做局部修补。
+训练和推理共用 `diffusiondrive.status` 的 status builder，避免 schema 分叉。
 
 ---
 

@@ -71,10 +71,9 @@ class DiffusionDriveConfig:
     use_depth: bool = False
     add_features: bool = True
 
-    # Status feature dims (command + velocity + acceleration)
+    # Status feature dims: command_one_hot(6) + speed(1)
     command_dim: int = 6
-    velocity_dim: int = 2
-    accel_dim: int = 2
+    speed_dim: int = 1
 
     tf_d_model: int = 256
     tf_d_ffn: int = 1024
@@ -138,7 +137,7 @@ class DiffusionDriveConfig:
 
     @property
     def status_dim(self) -> int:
-        return self.command_dim + self.velocity_dim + self.accel_dim
+        return self.command_dim + self.speed_dim
 
     @property
     def bev_semantic_frame(self) -> Tuple[int, int]:
