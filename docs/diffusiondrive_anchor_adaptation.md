@@ -15,7 +15,18 @@
 - `/home/HeavenlySU/sitp_workspace/4-0-0-1910-tracked_clusters.json`
   - `99` 个 cluster。
   - 每个 cluster 包含 `cluster_id`、`mu`、`var`。
-  - 每个 `mu` 长度为 `20`，语义是拉直后的 `10` 个 `(x, y)` 轨迹点。
+  - 每个 `mu` 长度为 `20`，语义是拉直后的 `10` 个 `(x, y)` 空间 checkpoint 点。
+
+## Anchor 语义估计
+
+当前没有拿到完整生成日志，但从 anchor 几何和 syb / garage DPMM 脚本可以推断：
+
+- anchor 来自旧 garage / syb 的 `route` checkpoint 聚类，而不是 fixed-time future ego trajectory 聚类。
+- `syb_carla_garage/my_dpmm_model/b2d_traj_fit_dpmm_by_ability.py` 中聚类输入是 `batch["route"].reshape(...)`。
+- 旧 dataset 的 `smooth_path()` / `iterative_line_interpolation()` 逻辑是第一个 route point 约 `2.5m`，之后每个点间隔 `1.0m`。
+- 当前 `99x10x2` anchor 的相邻点距离中位数约 `1.0m`，第一个点距离约 `2.5m`，最后一个点约 `11.5m`。
+
+因此当前 anchor 应按空间 route/checkpoint anchor 理解，不应解释为 `0.5s` 或 `1.0s` 的 time-based trajectory anchor。
 
 ## 源文件一致性校验
 
@@ -62,7 +73,7 @@ pose 数更硬：
 当前实现已经将轨迹主接口统一为 `99x10x2`：
 
 - `DiffusionDriveConfig.num_anchor_modes` 跟随 anchor 第一维，当前为 `99`。
-- `trajectory_sampling.time_horizon` 跟随 anchor pose 数和采样间隔，当前为 `10 * 0.5s = 5.0s`。
+- `trajectory_sampling.time_horizon` 当前仍随 pose 数和兼容字段 `interval_length` 得到 `10 * 0.5s = 5.0s`，但这不代表当前 anchor 的真实时间语义。
 - `DiffMotionPlanningRefinementModule.plan_reg_branch` 输出 `ego_fut_ts * 2`。
 - `TrajectoryHead.forward_train()/forward_test()`、loss、agent PID 入口均使用 `(x, y)`，不再传递 heading。
 
@@ -82,7 +93,7 @@ pose 数更硬：
 4. Loss / target builder
    - `LossComputer` 的注释和 shape 假设改成动态 mode / pose。
    - loss 仅监督 XY；若训练 target 暂时保留 heading，也只取前两维。
-   - 后续 CARLA 训练 target 必须同步到 `10` 个 pose。
+   - 默认 CARLA / B2D Full 训练 target 已切换为 `spatial_path`，按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样到 `10` 个 pose。
 5. 控制器
    - `_control_pid()` 当前通过 `carla_fps // (wp_dilation * data_save_freq)` 取 1 秒索引。
    - 若 10 pose 仍是 0.5s 间隔，则控制器可运行，但需要确认 desired speed 的点索引和 horizon 语义。

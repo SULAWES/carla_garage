@@ -28,7 +28,7 @@
 - loss：`--trajectory-weight`、`--trajectory-cls-weight`、`--trajectory-reg-weight`、`--trajectory-focal-alpha`、`--trajectory-focal-gamma`
 - diffusion：`--diffusion-num-train-timesteps`、`--diffusion-train-timestep-min/max`、`--diffusion-infer-step-num`、`--diffusion-infer-timestep-span`、`--diffusion-infer-trunc-timesteps`
 - data split：`--val-root-dir`、`--val-route-glob`、`--val-frame-sampling`、`--val-max-samples`、`--val-every-steps`、`--max-val-steps`
-- dataset / time contract：`--dataset-mode`、`--assumed-frame-interval`、`--future-stride`、`--b2d-source-image-height`、`--b2d-source-image-width`
+- dataset / target / time contract：`--dataset-mode`、`--target-mode`、`--spatial-target-first-distance`、`--spatial-target-interval`、`--spatial-target-max-future-frames`、`--assumed-frame-interval`、`--future-stride`、`--b2d-source-image-height`、`--b2d-source-image-width`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 
 ## Status Feature 与 Extra Sensors
@@ -77,12 +77,14 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 - `Dataset samples: 2`
 - `status_feature`: `{"schema": "command_one_hot(6)+speed(1)", "dim": 7, "normalized": false}`
 - `data.dataset_mode`: `b2d_full_raw`
-- `time_semantics`: `target_interval_seconds=1.0`, `trajectory_sampling_interval_seconds=0.5`, `anchor_shape=[99,10,2]`
-- `epoch=0 step=1 loss=2252.0107`
-- `trajectory_unweighted=187.6676`
-- `trajectory_loss_0=93.9595`
-- `trajectory_loss_1=93.7080`
-- checkpoint：`/tmp/dd_train_b2d_contract_smoke/smoke/checkpoint_epoch000_step0000001.pth`
+- `target.mode`: `spatial_path`
+- `target.spatial_path`: `first=2.5m`, `interval=1.0m`, `last=11.5m`
+- `anchor`: `shape=[99,10,2]`, `semantics=spatial route/checkpoint anchor`
+- `epoch=0 step=1 loss=287.6801`
+- `trajectory_unweighted=23.9733`
+- `trajectory_loss_0=11.8513`
+- `trajectory_loss_1=12.1220`
+- checkpoint：`/tmp/dd_train_spatial_target_smoke/smoke/checkpoint_epoch000_step0000001.pth`
 
 带验证集 smoke：
 
@@ -128,7 +130,7 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 
 ## Full 数据集示例
 
-远程 B2D Full 数据集只需要替换 `--root-dir` 和 `--logdir`。默认 `--dataset-mode b2d_full_raw`、`--assumed-frame-interval 0.1`、`--future-stride 10`，训练配置会记录这些假设：
+远程 B2D Full 数据集只需要替换 `--root-dir` 和 `--logdir`。默认 `--dataset-mode b2d_full_raw`、`--target-mode spatial_path`、`--assumed-frame-interval 0.1`，训练配置会记录这些假设：
 
 ```bash
 conda run -n garage_2 python team_code/train_diffusiondrive.py \
@@ -155,8 +157,10 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 ## 当前限制
 
 - B2D Full raw 图像通常是 `900x1600`。当前 dataset 会先 resize 到在线 garage sensor size `512x1024`，再执行 `crop_array -> 256x1024`。这会对齐模型输入 shape，但不消除 B2D Full raw sensor 与在线 garage sensor suite 的 FOV / pose / LiDAR 外参 gap。
-- 未来轨迹 target 优先使用 raw Bench2Drive ego vehicle `world2ego` 矩阵，将未来 ego vehicle `location` 转到当前 ego frame；缺少 bbox 矩阵时才 fallback 到经过 `preprocess_compass()` 等价处理的 `x/y/theta`。
-- 轨迹时间语义仍未冻结；`training_config.json` 现在会记录 frame interval、future stride、target interval、trajectory sampling interval 和 anchor shape，供 full training 前检查。
+- 默认 trajectory target 已切换为 `spatial_path`：从 future ego path 中按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样，使 target 与当前 `99x10x2` anchor 的空间 checkpoint 语义一致。
+- `spatial_path` 样本发现至少要求下一帧 annotation 存在；future path 不足覆盖 `11.5m` 时才沿路径末段或 command 方向外推。
+- `future_stride` 只用于 `--target-mode future_ego_time` legacy 路径；默认训练不再把 target 点解释为固定时间间隔。
+- `trajectory_sampling.interval_length` 目前仍保留为 DiffusionDrive config 兼容字段，不代表当前空间 checkpoint target 的真实时间间隔。
 - 暂不支持 distributed / AMP / EMA。
 - 暂不训练 auxiliary heads。
 - `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。

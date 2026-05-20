@@ -12,7 +12,7 @@
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中的 `extra_sensors` 是可选分支：按配置拼接 `velocity(1)` 与 / 或 `discrete_command(6)`，再经 `extra_sensor_encoder` 编码
 - `syb_carla_garage` 里的 `extra_sensors` 关键设计是 `speed(1) + command_one_hot(6)`，并作为低维条件 token 接入 transformer decoder；这个思想已吸收到 DiffusionDrive 的 `status_feature`，但不在 DD 中额外保留一套独立 `extra_sensors` 分支
-- 当前新提取的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 语义为 `99x10x2`
+- 当前新提取的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 语义为 `99x10x2` 空间 route/checkpoint anchor
 - 其来源 JSON 中每个 cluster 的 `mu` 都是一条拉直后的 `10` 个路点 `(x, y)` 轨迹，即一个 `20D` 向量
 - 当前训练和后续修改以 Bench2Drive Full raw 数据为主训练分布；sensor / time / preprocessing contract 见 `b2d_full_sensor_contract.md`
 
@@ -34,9 +34,11 @@
 - [ ] **训练标签与轨迹定义冻结**
   - [x] 修正 raw Bench2Drive target 坐标系：优先使用 ego vehicle `world2ego` 矩阵，缺失时 fallback 到 `preprocess_compass()` 等价处理后的 `x/y/theta`
   - [x] 用 ego vehicle `world2ego` / `location` 抽样复核 `ego_relative_xy()`；mini 抽样 92 对 frame 的矩阵目标误差为 `0`
-  - [ ] 明确未来轨迹采样方式
-  - [ ] 明确 raw Bench2Drive frame 间隔、`future_stride`、`trajectory_sampling.interval_length`、anchor 时间间隔和 PID waypoint 时间间隔的一致关系
-  - [ ] 明确 anchor 生成方式与数组形状
+  - [x] 明确默认 trajectory target 采用 `spatial_path`：从 future ego path 按 `2.5m + 1.0m` 空间距离重采样
+  - [x] 明确 anchor 是空间 checkpoint 语义，不是固定时间间隔 trajectory
+  - [ ] 明确 `trajectory_sampling.interval_length` 是否保留为兼容字段，或后续改为显式空间 checkpoint config
+  - [ ] 明确 PID waypoint 间隔假设是否需要按空间 checkpoint target 改写
+  - [x] 明确 anchor 生成方式与数组形状
   - [x] 校验最新 `99x10x2` anchor 与源 JSON 一致，并记录直接升级路线，见 `diffusiondrive_anchor_adaptation.md`
   - [x] 明确 heading 不由轨迹 head 预测，主轨迹接口固定为 XY
   - [x] 明确采用新聚类 anchor：`99` 个 mode，每个 mode 对应 `10x2` 轨迹点
@@ -60,7 +62,7 @@
   - [x] 训练入口支持 trajectory loss weights、focal alpha/gamma 和 diffusion timestep 配置
   - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
-  - [x] `training_config.json` 记录 B2D Full dataset mode、frame interval 假设、target interval、anchor shape 和 sensor contract
+  - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
 
 ### P1 级别（直接影响训练效果）
@@ -110,7 +112,7 @@
 
 - [ ] **评测与控制闭环设计**
   - [ ] 明确训练完成后继续用 waypoint PID 还是改控制器
-  - [ ] 若轨迹间隔采用 0.5s 或 1.0s，重写 `_control_pid()` 中 desired speed 的 waypoint 索引/时间差计算
+  - [ ] 当前 target / anchor 是空间 checkpoint 语义，重写或复核 `_control_pid()` 中 desired speed 的 waypoint 索引/距离假设
   - [ ] 明确训练指标与 leaderboard 指标的对齐方式
 
 - [ ] **训练工程可复现性**
@@ -178,7 +180,7 @@
   - mean error: `17.05m`
   - p95 error: `56.50m`
   - 若先做 `theta - pi/2`，误差降到 mean `0.87m`、p95 `1.70m`
-- raw Bench2Drive frame 从 bbox 位移 / speed 估计约为 `0.1s` 间隔。当前 `future_stride=10` 更接近 `1.0s` 采样，而 DiffusionDrive config / anchor / 控制器仍按另一套 waypoint 时间语义工作。
+- raw Bench2Drive frame 从 bbox 位移 / speed 估计约为 `0.1s` 间隔。默认 target 已不再使用 `future_stride=10` 的 fixed-time 采样，而是从 future ego path 空间重采样为 `2.5m, 3.5m, ..., 11.5m` checkpoint。
 - raw Bench2Drive 传感器与 garage 在线 agent 传感器几何差异很大：
   - Bench2Drive front camera: `1600x900, fov=70, x=0.8,z=1.6`
   - garage front camera: `1024x512, fov=110, x=-1.5,z=2.0`
@@ -190,8 +192,8 @@
 **直接建议**：
 
 1. 在 full 数据上复核 target builder，使 `ego_relative_xy()` 与 `world2ego` 矩阵继续保持对齐。
-2. 冻结轨迹采样间隔：明确 `future_stride`、anchor interval、`trajectory_sampling.interval_length` 和 PID waypoint interval。
-3. 决定训练主线到底是 raw Bench2Drive 传感器几何，还是重采 garage sensor suite 数据；不要让 resize/crop 掩盖 FOV/pose gap。
+2. 复核空间 checkpoint target builder 在 Full 数据上的 target 分布，并确认 `trajectory_sampling.interval_length` 是否只保留为兼容字段。
+3. 训练主线已确定为 B2D Full raw；继续显式记录 raw sensor 与在线 garage sensor suite 的 FOV / pose / LiDAR 外参 gap。
 4. 再跑 full 数据小 smoke 和吞吐量测试。
 
 ---

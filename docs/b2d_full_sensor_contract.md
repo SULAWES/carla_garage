@@ -57,26 +57,42 @@ B2D Full raw sensor 和在线 garage sensor suite 不完全一致：
 
 ## 时间语义
 
-当前训练入口默认记录以下假设：
+当前 B2D Full 相邻 annotation frame interval 估计约为 `0.1s`。这个时间间隔现在只用于解释 future ego path 搜索窗口和 legacy time target，不再定义默认 trajectory target 的点间隔。
 
 - `dataset_mode`: `b2d_full_raw`
 - `assumed_frame_interval_seconds`: `0.1`
-- `future_stride_frames`: 默认 `10`
-- `target_interval_seconds`: `future_stride * assumed_frame_interval`
+- `target_mode`: `spatial_path`
+- `future_stride_frames`: 默认 `10`，仅用于 `target_mode=future_ego_time` legacy 路径
 - `trajectory_sampling_interval_seconds`: 来自 `DiffusionDriveConfig.trajectory_sampling.interval_length`
-- `anchor_interval_seconds_assumption`: 当前同 `trajectory_sampling.interval_length`
+- `anchor_interval_seconds_assumption`: `null`
 
-注意：轨迹时间语义仍未冻结。full training 前仍需明确：
+## Trajectory Target 与 Anchor 语义
 
-- B2D Full frame interval 是否稳定为 `0.1s`
-- target stride、anchor interval、`trajectory_sampling.interval_length` 是否一致
-- PID desired speed 的 waypoint 间隔假设是否需要改写
+当前采用方案 B：训练 target 与 `99x10x2` anchor 统一为空间 checkpoint 语义。
+
+anchor 估计语义：
+
+- 第一个点距离 ego 约 `2.5m`
+- 后续相邻点约 `1.0m`
+- 10 个点覆盖约 `2.5m -> 11.5m`
+- 不是固定 `0.5s` 或 `1.0s` 的 time-based future trajectory
+
+当前 dataset target 构造：
+
+- 样本发现阶段要求 `spatial_path` 至少存在下一帧 annotation，避免 route 末尾完全无未来 ego path 时纯靠 command 生成训练标签
+- 从当前 frame 后续 ego vehicle world location 构成 future ego path
+- 将 future path 转到当前 ego frame
+- 按距离重采样为 `2.5m, 3.5m, ..., 11.5m`
+- 若 future path 不足，沿最后路径方向外推；若几乎无路径方向，则用 `command_far / command_near` 方向外推
+
+注意：`DiffusionDriveConfig.trajectory_sampling.interval_length` 目前仍保留为兼容 DiffusionDrive config 的字段，不应被解释为当前 target / anchor 的真实时间间隔。后续如需更干净的配置体系，应将空间 checkpoint 采样从 `TrajectorySampling` 中拆出来。
 
 ## Training Config 记录
 
 `team_code/train_diffusiondrive.py` 会在 `training_config.json` 中记录：
 
 - `data.dataset_mode`
+- `target`
 - `time_semantics`
 - `anchor.path / shape / num_modes`
 - `sensor_contract`
@@ -89,5 +105,5 @@ B2D Full raw sensor 和在线 garage sensor suite 不完全一致：
 
 1. full training 前先在 B2D Full 上跑小 smoke 和吞吐量测试。
 2. 抽样可视化 raw image、preprocessed image、LiDAR BEV 和 target trajectory。
-3. 固定时间语义后，再决定是否调整 `trajectory_sampling.interval_length` 和 PID waypoint interval。
+3. 针对空间 checkpoint target，重新核对 PID desired speed 的 waypoint 间隔假设。
 4. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。

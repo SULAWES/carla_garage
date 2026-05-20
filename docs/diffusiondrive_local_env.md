@@ -55,24 +55,27 @@
   - 使用真实 `rgb_front`、真实 `.laz` LiDAR、真实 `anno`
   - 脚本：`tools/smoke_diffusiondrive_b2d_mini.py`
   - 命令：`conda run -n garage_2 python tools/smoke_diffusiondrive_b2d_mini.py`
+  - smoke 脚本已显式暴露 `--target-mode spatial_path|future_ego_time`；默认与训练入口一致为 `spatial_path`
   - raw B2D mini 图像为 `900x1600`；当前 B2D Full raw 是主训练分布，输入转换见 `b2d_full_sensor_contract.md`
-  - 从未来 `10` 个点构造 target：`(1, 10, 2)`
+  - target mode：`spatial_path`
+  - 从 future ego path 按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样 target：`(1, 10, 2)`
   - status feature：`(1, 7)`
   - 模型输出：`trajectory = (1, 10, 2)`
-  - 最近一次结果：`loss = 65.93270111083984`，`grad_norm = 0.7041137218475342`
+  - 最近一次结果：`loss = 17.09078598022461`，`grad_norm = 0.8400353789329529`
   - trajectory loss 为标量，backward 通过
 - Bench2Drive mini 训练入口 smoke 通过：
   - 脚本：`team_code/train_diffusiondrive.py`
   - 命令见 `docs/diffusiondrive_training.md`
   - `Dataset samples: 2`
   - `data.dataset_mode=b2d_full_raw`
-  - `time_semantics`: `target_interval_seconds=1.0`, `trajectory_sampling_interval_seconds=0.5`, `anchor_shape=[99,10,2]`
-  - `epoch=0 step=1 loss=2252.0107`
-  - checkpoint：`/tmp/dd_train_b2d_contract_smoke/smoke/checkpoint_epoch000_step0000001.pth`
+  - `target.mode=spatial_path`
+  - `target.spatial_path`: `first=2.5m`, `interval=1.0m`, `last=11.5m`
+  - `epoch=0 step=1 loss=287.6801`
+  - checkpoint：`/tmp/dd_train_spatial_target_smoke/smoke/checkpoint_epoch000_step0000001.pth`
 
 手写模型 smoke 中的 12 个未加载 tensor 主要来自 LiDAR 输入通道、status 维度和旧 `20x8` / `8x3` trajectory head。真实 agent setup 使用当前 `GlobalConfig`，LiDAR 输入通道与 checkpoint 对齐，因此只剩 11 个 mismatch；这些均与当前 `99x10x2` 迁移预期一致。
 
-Bench2Drive mini smoke 中的 `10x2` target 优先由 raw annotation 中 ego vehicle `world2ego` 矩阵构造，缺失矩阵时才 fallback 到经过 `preprocess_compass()` 等价处理的 `x/y/theta`。当前 `team_code/diffusiondrive/backbone.py` 已在本地 backbone 文件存在时优先加载本地权重，避免 smoke test 先访问 HuggingFace 再 fallback。
+Bench2Drive mini smoke 中的 `10x2` target 默认不再是 fixed-time future ego trajectory，而是从 future ego path 空间重采样得到的 checkpoint target。坐标转换优先使用 raw annotation 中 ego vehicle `world2ego` 矩阵，缺失矩阵时才 fallback 到经过 `preprocess_compass()` 等价处理的 `x/y/theta`。当前 `team_code/diffusiondrive/backbone.py` 已在本地 backbone 文件存在时优先加载本地权重，避免 smoke test 先访问 HuggingFace 再 fallback。
 
 ## 常用环境变量
 

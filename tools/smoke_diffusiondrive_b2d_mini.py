@@ -21,6 +21,8 @@ if str(TEAM_CODE) not in sys.path:
 
 from config import GlobalConfig  # noqa: E402
 from diffusiondrive.carla_native_dataset import (  # noqa: E402
+    TARGET_MODE_FUTURE_EGO_TIME,
+    TARGET_MODE_SPATIAL_PATH,
     build_camera_feature,
     build_lidar_feature,
     build_status_feature,
@@ -51,6 +53,14 @@ def main() -> None:
     parser.add_argument("--route", default="AccidentTwoWays_Town12_Route1444_Weather0")
     parser.add_argument("--frame", type=int, default=100)
     parser.add_argument("--future-stride", type=int, default=10)
+    parser.add_argument(
+        "--target-mode",
+        choices=(TARGET_MODE_SPATIAL_PATH, TARGET_MODE_FUTURE_EGO_TIME),
+        default=TARGET_MODE_SPATIAL_PATH,
+    )
+    parser.add_argument("--spatial-target-first-distance", type=float, default=2.5)
+    parser.add_argument("--spatial-target-interval", type=float, default=1.0)
+    parser.add_argument("--spatial-target-max-future-frames", type=int, default=120)
     parser.add_argument(
         "--anchor-path",
         default=os.environ.get(
@@ -87,6 +97,10 @@ def main() -> None:
         args.frame,
         dd_config.trajectory_sampling.num_poses,
         args.future_stride,
+        target_mode=args.target_mode,
+        spatial_first_distance=args.spatial_target_first_distance,
+        spatial_interval=args.spatial_target_interval,
+        spatial_max_future_frames=args.spatial_target_max_future_frames,
     ).unsqueeze(0)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -107,6 +121,7 @@ def main() -> None:
     print("mini_smoke_ok")
     print("route", args.route)
     print("frame", args.frame)
+    print("target_mode", args.target_mode)
     print("device", device)
     print("camera_feature", tuple(features["camera_feature"].shape))
     print("lidar_feature", tuple(features["lidar_feature"].shape))

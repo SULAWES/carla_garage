@@ -18,6 +18,9 @@ from config import GlobalConfig
 from diffusiondrive.status import build_status_feature_from_command
 import transfuser_utils as t_u
 
+TARGET_MODE_SPATIAL_PATH = "spatial_path"
+TARGET_MODE_FUTURE_EGO_TIME = "future_ego_time"
+
 
 class Bench2DriveDiffusionDataset(Dataset):
     """Raw Bench2Drive route dataset for the CARLA DiffusionDrive input contract."""
@@ -33,6 +36,10 @@ class Bench2DriveDiffusionDataset(Dataset):
         route_glob: str = "*",
         model_image_size: tuple[int, int] = (256, 1024),
         jpeg_artifact: bool = True,
+        target_mode: str = TARGET_MODE_SPATIAL_PATH,
+        spatial_target_first_distance: float = 2.5,
+        spatial_target_interval: float = 1.0,
+        spatial_target_max_future_frames: int = 120,
     ) -> None:
         self.config = config
         self.num_poses = num_poses
@@ -40,6 +47,10 @@ class Bench2DriveDiffusionDataset(Dataset):
         self.frame_sampling = frame_sampling
         self.model_image_size = model_image_size
         self.jpeg_artifact = jpeg_artifact
+        self.target_mode = target_mode
+        self.spatial_target_first_distance = spatial_target_first_distance
+        self.spatial_target_interval = spatial_target_interval
+        self.spatial_target_max_future_frames = spatial_target_max_future_frames
         self.samples = self._discover_samples(root_dirs, route_glob, max_samples)
         if not self.samples:
             roots = ", ".join(str(root) for root in root_dirs)
@@ -69,6 +80,10 @@ class Bench2DriveDiffusionDataset(Dataset):
                     frame,
                     self.num_poses,
                     self.future_stride,
+                    target_mode=self.target_mode,
+                    spatial_first_distance=self.spatial_target_first_distance,
+                    spatial_interval=self.spatial_target_interval,
+                    spatial_max_future_frames=self.spatial_target_max_future_frames,
                 ),
             },
             "route": route_dir.name,
@@ -102,9 +117,15 @@ class Bench2DriveDiffusionDataset(Dataset):
             return False
         if not (route_dir / "lidar" / f"{frame:05d}.laz").is_file():
             return False
-        for offset in range(self.future_stride, self.future_stride * (self.num_poses + 1), self.future_stride):
-            if not (route_dir / "anno" / f"{frame + offset:05d}.json.gz").is_file():
+        if self.target_mode == TARGET_MODE_FUTURE_EGO_TIME:
+            for offset in range(self.future_stride, self.future_stride * (self.num_poses + 1), self.future_stride):
+                if not (route_dir / "anno" / f"{frame + offset:05d}.json.gz").is_file():
+                    return False
+        elif self.target_mode == TARGET_MODE_SPATIAL_PATH:
+            if not (route_dir / "anno" / f"{frame + 1:05d}.json.gz").is_file():
                 return False
+        else:
+            raise RuntimeError(f"Unsupported DiffusionDrive target mode: {self.target_mode}")
         return True
 
 
@@ -199,13 +220,150 @@ def build_status_feature(annotation: dict) -> torch.Tensor:
     return build_status_feature_from_command(command, speed)
 
 
-def build_trajectory_target(route_dir: Path, frame: int, num_poses: int, stride: int) -> torch.Tensor:
+def build_trajectory_target(
+    route_dir: Path,
+    frame: int,
+    num_poses: int,
+    stride: int,
+    target_mode: str = TARGET_MODE_SPATIAL_PATH,
+    spatial_first_distance: float = 2.5,
+    spatial_interval: float = 1.0,
+    spatial_max_future_frames: int = 120,
+) -> torch.Tensor:
+    if target_mode == TARGET_MODE_SPATIAL_PATH:
+        return build_spatial_path_target(
+            route_dir,
+            frame,
+            num_poses,
+            first_distance=spatial_first_distance,
+            interval=spatial_interval,
+            max_future_frames=spatial_max_future_frames,
+        )
+    if target_mode != TARGET_MODE_FUTURE_EGO_TIME:
+        raise RuntimeError(f"Unsupported DiffusionDrive target mode: {target_mode}")
+    return build_future_ego_time_target(route_dir, frame, num_poses, stride)
+
+
+def build_future_ego_time_target(route_dir: Path, frame: int, num_poses: int, stride: int) -> torch.Tensor:
     origin = load_annotation(route_dir, frame)
     trajectory = []
     for offset in range(stride, stride * (num_poses + 1), stride):
         future = load_annotation(route_dir, frame + offset)
         trajectory.append(ego_relative_xy(origin, future))
     return torch.tensor(trajectory, dtype=torch.float32)
+
+
+def build_spatial_path_target(
+    route_dir: Path,
+    frame: int,
+    num_poses: int,
+    first_distance: float = 2.5,
+    interval: float = 1.0,
+    max_future_frames: int = 120,
+) -> torch.Tensor:
+    origin = load_annotation(route_dir, frame)
+    points = [np.zeros(2, dtype=np.float64)]
+    for offset in range(1, max_future_frames + 1):
+        future_path = route_dir / "anno" / f"{frame + offset:05d}.json.gz"
+        if not future_path.is_file():
+            break
+        future = load_annotation(route_dir, frame + offset)
+        points.append(np.asarray(ego_relative_xy(origin, future), dtype=np.float64))
+
+    polyline = _deduplicate_polyline(np.asarray(points, dtype=np.float64))
+    fallback_direction = _command_direction(origin)
+    target_distances = first_distance + interval * np.arange(num_poses, dtype=np.float64)
+    target = _resample_polyline_by_distance(polyline, target_distances, fallback_direction)
+    return torch.tensor(target, dtype=torch.float32)
+
+
+def _deduplicate_polyline(points: np.ndarray, min_segment_length: float = 1e-3) -> np.ndarray:
+    if points.shape[0] <= 1:
+        return points
+    kept = [points[0]]
+    for point in points[1:]:
+        if np.linalg.norm(point - kept[-1]) >= min_segment_length:
+            kept.append(point)
+    return np.asarray(kept, dtype=np.float64)
+
+
+def _resample_polyline_by_distance(
+    points: np.ndarray,
+    distances: np.ndarray,
+    fallback_direction: np.ndarray,
+) -> np.ndarray:
+    if points.shape[0] == 0:
+        points = np.zeros((1, 2), dtype=np.float64)
+
+    if points.shape[0] == 1:
+        direction = _normalize_direction(fallback_direction)
+        return points[0][None, :] + distances[:, None] * direction[None, :]
+
+    segments = np.diff(points, axis=0)
+    segment_lengths = np.linalg.norm(segments, axis=1)
+    valid = segment_lengths > 1e-6
+    if not np.any(valid):
+        direction = _normalize_direction(fallback_direction)
+        return points[0][None, :] + distances[:, None] * direction[None, :]
+
+    segments = segments[valid]
+    segment_lengths = segment_lengths[valid]
+    start_points = points[:-1][valid]
+    end_points = points[1:][valid]
+    cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+
+    samples = []
+    for distance in distances:
+        if distance <= cumulative[-1]:
+            segment_idx = int(np.searchsorted(cumulative, distance, side="right") - 1)
+            segment_idx = min(segment_idx, len(segment_lengths) - 1)
+            local = (distance - cumulative[segment_idx]) / segment_lengths[segment_idx]
+            samples.append(start_points[segment_idx] + local * (end_points[segment_idx] - start_points[segment_idx]))
+        else:
+            direction = _normalize_direction(segments[-1])
+            if np.linalg.norm(direction) < 1e-6:
+                direction = _normalize_direction(fallback_direction)
+            samples.append(end_points[-1] + (distance - cumulative[-1]) * direction)
+    return np.asarray(samples, dtype=np.float64)
+
+
+def _normalize_direction(direction: np.ndarray) -> np.ndarray:
+    direction = np.asarray(direction, dtype=np.float64)
+    norm = np.linalg.norm(direction)
+    if norm < 1e-6:
+        return np.array([1.0, 0.0], dtype=np.float64)
+    return direction / norm
+
+
+def _command_direction(origin: dict) -> np.ndarray:
+    command_points = []
+    for prefix in ("far", "near"):
+        x_key = f"x_command_{prefix}"
+        y_key = f"y_command_{prefix}"
+        if x_key in origin and y_key in origin:
+            command_points.append(_world_xy_to_ego_xy(origin, float(origin[x_key]), float(origin[y_key])))
+    for point in command_points:
+        if np.linalg.norm(point) > 1e-3:
+            return point
+    return np.array([1.0, 0.0], dtype=np.float64)
+
+
+def _world_xy_to_ego_xy(origin: dict, x: float, y: float) -> np.ndarray:
+    origin_world2ego = _ego_world2ego_matrix(origin)
+    origin_location = _ego_world_location(origin)
+    if origin_world2ego is not None:
+        point = np.ones(4, dtype=np.float64)
+        point[0] = x
+        point[1] = y
+        point[2] = float(origin_location[2]) if origin_location is not None else 0.0
+        return (origin_world2ego @ point)[:2]
+
+    dx = x - float(origin["x"])
+    dy = y - float(origin["y"])
+    theta = t_u.preprocess_compass(float(origin["theta"]))
+    cos_theta = math.cos(theta)
+    sin_theta = math.sin(theta)
+    return np.asarray([cos_theta * dx + sin_theta * dy, -sin_theta * dx + cos_theta * dy], dtype=np.float64)
 
 
 def ego_relative_xy(origin: dict, future: dict) -> list[float]:

@@ -49,6 +49,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-frame-sampling", type=int, default=None)
     parser.add_argument("--future-stride", type=int, default=10)
     parser.add_argument("--dataset-mode", default="b2d_full_raw")
+    parser.add_argument("--target-mode", choices=("spatial_path", "future_ego_time"), default="spatial_path")
+    parser.add_argument("--spatial-target-first-distance", type=float, default=2.5)
+    parser.add_argument("--spatial-target-interval", type=float, default=1.0)
+    parser.add_argument("--spatial-target-max-future-frames", type=int, default=120)
     parser.add_argument("--assumed-frame-interval", type=float, default=0.1)
     parser.add_argument("--b2d-source-image-height", type=int, default=900)
     parser.add_argument("--b2d-source-image-width", type=int, default=1600)
@@ -173,22 +177,45 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "frame_sampling": args.frame_sampling,
             "val_frame_sampling": args.val_frame_sampling or args.frame_sampling,
             "future_stride": args.future_stride,
+            "target_mode": args.target_mode,
             "max_samples": args.max_samples,
             "val_max_samples": args.val_max_samples,
         },
+        "target": {
+            "mode": args.target_mode,
+            "spatial_path": {
+                "first_distance_meters": args.spatial_target_first_distance,
+                "interval_meters": args.spatial_target_interval,
+                "num_poses": dd_config.trajectory_sampling.num_poses,
+                "last_distance_meters": (
+                    args.spatial_target_first_distance
+                    + args.spatial_target_interval * (dd_config.trajectory_sampling.num_poses - 1)
+                ),
+                "max_future_frames_for_path": args.spatial_target_max_future_frames,
+                "max_future_seconds_for_path": args.spatial_target_max_future_frames * args.assumed_frame_interval,
+                "source": "future ego path resampled by distance; sample discovery requires at least one future annotation and extrapolates from the last path segment or command direction when needed",
+            },
+            "future_ego_time_legacy": {
+                "future_stride_frames": args.future_stride,
+                "target_interval_seconds": args.future_stride * args.assumed_frame_interval,
+            },
+        },
         "time_semantics": {
             "assumed_frame_interval_seconds": args.assumed_frame_interval,
-            "future_stride_frames": args.future_stride,
-            "target_interval_seconds": args.future_stride * args.assumed_frame_interval,
+            "future_stride_frames_if_time_target": args.future_stride,
+            "target_interval_seconds_if_time_target": args.future_stride * args.assumed_frame_interval,
             "trajectory_sampling_interval_seconds": dd_config.trajectory_sampling.interval_length,
             "trajectory_sampling_num_poses": dd_config.trajectory_sampling.num_poses,
             "trajectory_sampling_time_horizon_seconds": dd_config.trajectory_sampling.time_horizon,
-            "anchor_interval_seconds_assumption": dd_config.trajectory_sampling.interval_length,
+            "anchor_interval_seconds_assumption": None,
+            "anchor_spatial_first_distance_meters": args.spatial_target_first_distance,
+            "anchor_spatial_interval_meters": args.spatial_target_interval,
         },
         "anchor": {
             "path": dd_config.plan_anchor_path,
             "shape": anchor_shape,
             "num_modes": dd_config.num_anchor_modes,
+            "semantics": "spatial route/checkpoint anchor, not fixed-time trajectory",
         },
         "sensor_contract": {
             "dataset_mode": args.dataset_mode,
@@ -445,6 +472,10 @@ def main() -> None:
         route_glob=args.route_glob,
         model_image_size=(dd_config.camera_height, dd_config.camera_width),
         jpeg_artifact=not args.no_jpeg_artifact,
+        target_mode=args.target_mode,
+        spatial_target_first_distance=args.spatial_target_first_distance,
+        spatial_target_interval=args.spatial_target_interval,
+        spatial_target_max_future_frames=args.spatial_target_max_future_frames,
     )
     dataloader = DataLoader(
         dataset,
@@ -466,6 +497,10 @@ def main() -> None:
             route_glob=args.val_route_glob or args.route_glob,
             model_image_size=(dd_config.camera_height, dd_config.camera_width),
             jpeg_artifact=not args.no_jpeg_artifact,
+            target_mode=args.target_mode,
+            spatial_target_first_distance=args.spatial_target_first_distance,
+            spatial_target_interval=args.spatial_target_interval,
+            spatial_target_max_future_frames=args.spatial_target_max_future_frames,
         )
         val_dataloader = DataLoader(
             val_dataset,
