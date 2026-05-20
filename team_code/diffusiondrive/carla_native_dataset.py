@@ -213,12 +213,63 @@ def build_trajectory_target(route_dir: Path, frame: int, num_poses: int, stride:
 
 
 def ego_relative_xy(origin: dict, future: dict) -> list[float]:
+    """Return future ego location in the origin frame.
+
+    Raw Bench2Drive annotations expose top-level x/y/theta fields, but their
+    theta follows the IMU compass convention used online before
+    preprocess_compass(). Prefer the ego vehicle world2ego matrix when present
+    so the target matches the garage ego-frame waypoint convention.
+    """
+    origin_world2ego = _ego_world2ego_matrix(origin)
+    future_location = _ego_world_location(future)
+    if origin_world2ego is not None and future_location is not None:
+        future_location_h = np.ones(4, dtype=np.float64)
+        future_location_h[:3] = future_location
+        future_ego = origin_world2ego @ future_location_h
+        return [float(future_ego[0]), float(future_ego[1])]
+
+    return _ego_relative_xy_from_pose(origin, future)
+
+
+def _ego_relative_xy_from_pose(origin: dict, future: dict) -> list[float]:
     dx = float(future["x"]) - float(origin["x"])
     dy = float(future["y"]) - float(origin["y"])
-    theta = float(origin["theta"])
+    theta = t_u.preprocess_compass(float(origin["theta"]))
     cos_theta = math.cos(theta)
     sin_theta = math.sin(theta)
     return [
         cos_theta * dx + sin_theta * dy,
         -sin_theta * dx + cos_theta * dy,
     ]
+
+
+def _ego_vehicle_box(annotation: dict) -> Optional[dict]:
+    boxes = annotation.get("bounding_boxes")
+    if not boxes:
+        return None
+    for box in boxes:
+        if box.get("class") == "ego_vehicle":
+            return box
+    return boxes[0]
+
+
+def _ego_world2ego_matrix(annotation: dict) -> Optional[np.ndarray]:
+    ego_box = _ego_vehicle_box(annotation)
+    if ego_box is None or "world2ego" not in ego_box:
+        return None
+    matrix = np.asarray(ego_box["world2ego"], dtype=np.float64)
+    if matrix.shape != (4, 4):
+        return None
+    return matrix
+
+
+def _ego_world_location(annotation: dict) -> Optional[np.ndarray]:
+    ego_box = _ego_vehicle_box(annotation)
+    if ego_box is None:
+        return None
+    for key in ("location", "center"):
+        if key in ego_box:
+            location = np.asarray(ego_box[key], dtype=np.float64)
+            if location.shape == (3,):
+                return location
+    return None

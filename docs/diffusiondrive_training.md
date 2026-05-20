@@ -28,6 +28,30 @@
 - data split：`--val-root-dir`、`--val-route-glob`、`--val-frame-sampling`、`--val-max-samples`、`--val-every-steps`、`--max-val-steps`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 
+## Status Feature 与 Extra Sensors
+
+当前 DiffusionDrive 训练入口仍使用 `10` 维 `status_feature`：
+
+```text
+command_one_hot(6) + velocity(speed,0) + acceleration(accel_x,0)
+```
+
+训练侧当前由 `carla_native_dataset.build_status_feature()` 构造；推理侧由 `DiffusionDriveAgent._build_status()` 构造。两者当前并不完全一致：训练侧 `accel_x` 来自 raw Bench2Drive anno 的 IMU acceleration，推理侧 `accel_x` 来自 speed finite difference。
+
+需要和 garage / syb 旧模型里的 `extra_sensors` 区分：
+
+- `extra_sensors` 是旧 `team_code/model.py` 的可选分支，不是 DiffusionDrive 当前接口。
+- syb 仓库里重点关注的 `extra_sensors` 本质是 `speed(1) + command_one_hot(6)`，再经 `extra_sensor_encoder` 投影成 decoder token。
+- DiffusionDrive 已经有 `status_feature -> _status_encoding` 这个低维条件 token 入口，因此不建议再额外引入一套独立 `extra_sensors` 分支。
+
+推荐迁移方向：
+
+```text
+status_feature_v2 = command_one_hot(6) + speed(1)
+```
+
+也就是把 syb / garage `extra_sensors` 的核心设计吸收到 DiffusionDrive 的 `status_feature` 中。迁移后 `_status_encoding` 会从 `Linear(10, 256)` 变成 `Linear(7, 256)`，旧 checkpoint 中这一层按 shape mismatch 跳过即可。
+
 ## 本机 mini smoke
 
 ```bash
@@ -125,8 +149,8 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 ## 当前限制
 
 - raw Bench2Drive 图像通常是 `900x1600`。当前 dataset 为了匹配已冻结 CARLA-native 主线，会先 resize 到在线 sensor size `512x1024`，再执行 `crop_array -> 256x1024`。
-- 未来轨迹 target 暂时从 `anno` 的 `x/y/theta` 直接构造 `10x2` XY 轨迹。
+- 未来轨迹 target 优先使用 raw Bench2Drive ego vehicle `world2ego` 矩阵，将未来 ego vehicle `location` 转到当前 ego frame；缺少 bbox 矩阵时才 fallback 到经过 `preprocess_compass()` 等价处理的 `x/y/theta`。
 - 暂不支持 distributed / AMP / EMA。
 - 暂不训练 auxiliary heads。
 - `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。
-- `status_feature` 仍沿用当前定义：`command(6) + velocity(2) + acceleration(2)`；其中 lateral velocity / acceleration 暂置 0。
+- `status_feature` 仍沿用当前 `10` 维定义：`command(6) + velocity(2) + acceleration(2)`；其中 lateral velocity / acceleration 暂置 0。推荐在 full training 前迁移到 `command_one_hot(6) + speed(1)` 的 `7` 维 schema。

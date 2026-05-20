@@ -2,7 +2,7 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-05-19
+**更新日期**: 2026-05-20
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
@@ -11,6 +11,7 @@
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command(6) + velocity(2) + acceleration(2)`
 - `carla_garage/team_code/model.py` 中的 `extra_sensors` 是可选分支：按配置拼接 `velocity(1)` 与 / 或 `discrete_command(6)`，再经 `extra_sensor_encoder` 编码
+- `syb_carla_garage` 里的 `extra_sensors` 关键设计是 `speed(1) + command_one_hot(6)`，并作为低维条件 token 接入 transformer decoder；这个思想应吸收到 DiffusionDrive 的 `status_feature`，但不建议在 DD 中额外保留一套独立 `extra_sensors` 分支
 - 当前新提取的聚类 anchor 文件 `4-0-0-1910-tracked_clusters_anchor.npy` 语义为 `99x10x2`
 - 其来源 JSON 中每个 cluster 的 `mu` 都是一条拉直后的 `10` 个路点 `(x, y)` 轨迹，即一个 `20D` 向量
 
@@ -24,12 +25,14 @@
   - [x] 明确相机输入方案：第一阶段采用 CARLA-native 单前视，不采用 NAVSIM 三相机拼接
   - [x] 明确图像裁剪 / resize / normalize 方案：`512x1024 -> crop_array 384x1024 -> resize 256x1024 -> [0,1]`，默认无 ImageNet normalization
   - [x] 明确 LiDAR 输入通道定义：沿用 garage histogram，默认 `use_ground_plane=False`，每帧 `1` 个 above-split 通道；多帧时按 `lidar_seq_len` 拼接
-  - [ ] 明确 `status_feature` 的最终定义
-  - [ ] 明确是否保留独立 `extra_sensors` 分支，以及其输入组成
+  - [x] 记录当前 `status_feature` 事实：`command_one_hot(6) + velocity(speed,0) + acceleration(accel_x,0)`，共 `10` 维
+  - [x] 记录 `extra_sensors` 来源：garage / syb 旧模型中为 `speed(1) + command_one_hot(6)` 的低维条件 token
+  - [x] 明确 DiffusionDrive 不新增独立 `extra_sensors` 分支；后续将其思想合并进 `status_feature`
+  - [ ] 将 `status_feature` 迁移到推荐的 `command_one_hot(6) + speed(1)`，共 `7` 维
 
 - [ ] **训练标签与轨迹定义冻结**
-  - [ ] 修正 raw Bench2Drive `anno["theta"]` 到 CARLA ego yaw 的转换；当前 target builder 未做 `preprocess_compass()` 等价处理
-  - [ ] 用 `bounding_boxes[0]["world2ego"]` / ego pose 矩阵复核 `ego_relative_xy()`，并落盘 target 可视化/统计
+  - [x] 修正 raw Bench2Drive target 坐标系：优先使用 ego vehicle `world2ego` 矩阵，缺失时 fallback 到 `preprocess_compass()` 等价处理后的 `x/y/theta`
+  - [x] 用 ego vehicle `world2ego` / `location` 抽样复核 `ego_relative_xy()`；mini 抽样 92 对 frame 的矩阵目标误差为 `0`
   - [ ] 明确未来轨迹采样方式
   - [ ] 明确 raw Bench2Drive frame 间隔、`future_stride`、`trajectory_sampling.interval_length`、anchor 时间间隔和 PID waypoint 时间间隔的一致关系
   - [ ] 明确 anchor 生成方式与数组形状
@@ -60,12 +63,14 @@
 ### P1 级别（直接影响训练效果）
 
 - [ ] **`status_feature` 重定义**
-  - [ ] 明确 command 维度和语义
+  - [x] 明确当前 command 维度为 CARLA `command_one_hot(6)`
+  - [x] 明确 syb / garage `extra_sensors` 对应的是 `speed(1) + command_one_hot(6)`，不是 DD 当前的 `10` 维 status
+  - [x] 明确设计方向：DD 只保留 `status_feature` 入口，不额外引入旧模型式独立 `extra_sensors` 分支
+  - [ ] 实现推荐 schema：`status_feature_v2 = command_one_hot(6) + speed(1)`
   - [ ] 明确训练使用当前 command 还是推理侧延迟一拍的 `commands[-2]`
-  - [ ] 明确 velocity / acceleration 的取值方式
-  - [ ] 统一 acceleration：训练当前用 IMU `acceleration[0]`，推理当前用 speed finite difference
-  - [ ] 明确是否做归一化
-  - [ ] 明确 `status_feature` 和 `extra_sensors` 是否并存，还是合并为单一状态输入
+  - [ ] 将训练侧和推理侧改为共用同一份 status builder，避免 schema 分叉
+  - [ ] 迁移时删除 / 废弃 acceleration 输入；当前训练用 IMU `acceleration[0]`、推理用 speed finite difference，二者不一致
+  - [ ] 明确 speed 是否归一化；syb 旧模型通过 `BatchNorm1d(1, affine=False)` 处理速度，DD 迁移时需要单独决策
 
 - [ ] **图像预处理方案验证**
   - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`
@@ -161,11 +166,11 @@
 
 #### 4. 2026-05-19 训练风险扫描结论
 
-本次扫描没有改代码，只对现有训练链路做静态检查和 mini 数据统计。结论是：full training 前不能只跑 smoke，需要先修正 target 坐标和时间语义，否则长训结果不可用。
+本次扫描当时没有改代码，只对训练链路做静态检查和 mini 数据统计。后续已修正 target 坐标主路径；full training 前仍需冻结时间语义，否则长训结果不可用。
 
 **最高优先级问题**：
 
-- `carla_native_dataset.py` 当前直接用 `anno["theta"]` 构造 `ego_relative_xy()`。但在线推理侧会先对 IMU compass 做 `preprocess_compass()`，等价于 `theta - pi/2`。在 Bench2Drive mini 上，当前 target 与 anno 中 ego `world2ego` 矩阵计算结果的误差约为：
+- `carla_native_dataset.py` 曾直接用 `anno["theta"]` 构造 `ego_relative_xy()`。但在线推理侧会先对 IMU compass 做 `preprocess_compass()`，等价于 `theta - pi/2`。在 Bench2Drive mini 上，旧 target 与 anno 中 ego `world2ego` 矩阵计算结果的误差约为：
   - mean error: `17.05m`
   - p95 error: `56.50m`
   - 若先做 `theta - pi/2`，误差降到 mean `0.87m`、p95 `1.70m`
@@ -180,7 +185,7 @@
 
 **直接建议**：
 
-1. 先修 target builder，至少让 `ego_relative_xy()` 与 `world2ego` 矩阵在 mini/full smoke 上对齐。
+1. 在 full 数据上复核 target builder，使 `ego_relative_xy()` 与 `world2ego` 矩阵继续保持对齐。
 2. 冻结轨迹采样间隔：明确 `future_stride`、anchor interval、`trajectory_sampling.interval_length` 和 PID waypoint interval。
 3. 决定训练主线到底是 raw Bench2Drive 传感器几何，还是重采 garage sensor suite 数据；不要让 resize/crop 掩盖 FOV/pose gap。
 4. 再跑 full 数据小 smoke 和吞吐量测试。
@@ -193,17 +198,14 @@
 
 **问题描述**：
 
-既然后续计划在 CARLA 上重新训练，那么当前推理侧的 `status_feature` 不应被视为最终答案，而应在训练前重新定义。
+既然后续计划在 CARLA 上重新训练，那么当前推理侧的 `status_feature` 不应被视为最终答案，而应在训练前重新定义。这里最容易混淆的是：DiffusionDrive 当前的 `status_feature` 和 garage / syb 旧模型里的 `extra_sensors` 不是同一个接口。
 
 **至少要明确**：
 
-- command 用几维
-- command 的类别语义是什么
-- velocity / acceleration 是否保留 2D
-- 是否加入更多状态量
-- 是否做归一化
-- 是否保留独立 `extra_sensors` 分支
-- 若保留，`extra_sensors` 中具体拼哪些量：`velocity(1)`、`discrete_command(6)`，还是别的输入
+- command 用几维，以及训练 command 是否要模拟推理侧 `commands[-2]` 延迟
+- speed 是否归一化
+- 是否保留 acceleration
+- 是否把 syb / garage `extra_sensors` 的 7 维设计吸收到 DD 的 `status_feature`
 
 **当前代码事实**：
 
@@ -212,11 +214,12 @@
   - 若 `use_velocity=True`，加入 `velocity_normalization(ego_vel)`，贡献 `1` 维
   - 若 `use_discrete_command=True`，加入 `command`，贡献 `6` 维
   - 两者拼接后送入 `extra_sensor_encoder`
-- 因此这里真正需要冻结的是：训练侧到底采用哪一套输入接口，而不是把两者误写成固定的 `6+1`
+- `syb_carla_garage` 里默认关注的是 `use_velocity=1`、`use_discrete_command=True`、`use_tp=True`、`tp_attention=True`，其中 `extra_sensors` 本质是 `speed(1) + command_one_hot(6)`，再投影为 decoder token
+- 因此这里真正需要冻结的是：DD 采用哪个低维条件 schema，而不是把 `status_feature` 和 `extra_sensors` 当成两套并存输入
 
 **结论**：
 
-这项不该继续围绕 navsim checkpoint 修补，而应该直接按 CARLA 训练目标重新设计。
+推荐方向是：DiffusionDrive 只保留 `status_feature` 入口，不新增独立 `extra_sensors` 分支；把 syb / garage `extra_sensors` 的核心设计吸收到 `status_feature_v2 = command_one_hot(6) + speed(1)`。这会把当前 `10` 维 status 改成 `7` 维，`_status_encoding` 需要重建，旧 checkpoint 中这一层按 shape mismatch 跳过即可。
 
 ### 2. 相机输入方案需要冻结
 
