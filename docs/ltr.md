@@ -29,3 +29,6 @@ status_feature 当前名：DiffusionDrive 的低维条件 token
 推荐做法：DD 保留 status_feature 这个入口，但把内容改成 7 维 speed+command。
 
 这也解释了你记得的“10 维迁移到 6(+1) 维”：这个事项确实应该做，而且来源就是 garage/syb 这条线的 extra_sensors 设计。
+
+
+command时序差异出自对garage sensor_agent的继承
