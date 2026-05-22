@@ -40,6 +40,8 @@ class Bench2DriveDiffusionDataset(Dataset):
         spatial_target_first_distance: float = 2.5,
         spatial_target_interval: float = 1.0,
         spatial_target_max_future_frames: int = 120,
+        balanced_scenarios: bool = False,
+        max_samples_per_scenario: Optional[int] = None,
     ) -> None:
         self.config = config
         self.num_poses = num_poses
@@ -51,7 +53,9 @@ class Bench2DriveDiffusionDataset(Dataset):
         self.spatial_target_first_distance = spatial_target_first_distance
         self.spatial_target_interval = spatial_target_interval
         self.spatial_target_max_future_frames = spatial_target_max_future_frames
-        self.samples = self._discover_samples(root_dirs, route_glob, max_samples)
+        self.balanced_scenarios = balanced_scenarios
+        self.max_samples_per_scenario = max_samples_per_scenario
+        self.samples, self.scenario_sample_counts = self._discover_samples(root_dirs, route_glob, max_samples)
         if not self.samples:
             roots = ", ".join(str(root) for root in root_dirs)
             raise RuntimeError(f"No trainable Bench2Drive samples found under: {roots}")
@@ -95,8 +99,12 @@ class Bench2DriveDiffusionDataset(Dataset):
         root_dirs: Iterable[str | Path],
         route_glob: str,
         max_samples: Optional[int],
-    ) -> List[tuple[Path, int]]:
+    ) -> tuple[List[tuple[Path, int]], dict[str, int]]:
+        if self.balanced_scenarios:
+            return self._discover_balanced_samples(root_dirs, route_glob, max_samples)
+
         samples: List[tuple[Path, int]] = []
+        scenario_counts: dict[str, int] = {}
         for root in root_dirs:
             root_path = Path(root)
             if not root_path.exists():
@@ -104,25 +112,59 @@ class Bench2DriveDiffusionDataset(Dataset):
             for route_dir in sorted(root_path.glob(route_glob)):
                 if not _is_b2d_route(route_dir):
                     continue
-                frames = sorted(int(path.stem.split(".")[0]) for path in (route_dir / "anno").glob("*.json.gz"))
+                frames = sorted(int(path.stem.split(".")[0]) for path in _annotation_dir(route_dir).glob("*.json.gz"))
                 for frame in frames[:: self.frame_sampling]:
                     if self._has_required_files(route_dir, frame):
                         samples.append((route_dir, frame))
+                        scenario = _scenario_name(route_dir)
+                        scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
                         if max_samples is not None and len(samples) >= max_samples:
-                            return samples
-        return samples
+                            return samples, scenario_counts
+        return samples, scenario_counts
+
+    def _discover_balanced_samples(
+        self,
+        root_dirs: Iterable[str | Path],
+        route_glob: str,
+        max_samples: Optional[int],
+    ) -> tuple[List[tuple[Path, int]], dict[str, int]]:
+        scenario_buckets: dict[str, List[tuple[Path, int]]] = {}
+        for root in root_dirs:
+            root_path = Path(root)
+            if not root_path.exists():
+                raise RuntimeError(f"Bench2Drive root does not exist: {root_path}")
+            for route_dir in sorted(root_path.glob(route_glob)):
+                if not _is_b2d_route(route_dir):
+                    continue
+                scenario = _scenario_name(route_dir)
+                bucket = scenario_buckets.setdefault(scenario, [])
+                if self.max_samples_per_scenario is not None and len(bucket) >= self.max_samples_per_scenario:
+                    continue
+                frames = sorted(int(path.stem.split(".")[0]) for path in _annotation_dir(route_dir).glob("*.json.gz"))
+                for frame in frames[:: self.frame_sampling]:
+                    if self._has_required_files(route_dir, frame):
+                        bucket.append((route_dir, frame))
+                        if self.max_samples_per_scenario is not None and len(bucket) >= self.max_samples_per_scenario:
+                            break
+
+        samples = _round_robin_scenario_samples(scenario_buckets, max_samples)
+        scenario_counts: dict[str, int] = {}
+        for route_dir, _frame in samples:
+            scenario = _scenario_name(route_dir)
+            scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
+        return samples, scenario_counts
 
     def _has_required_files(self, route_dir: Path, frame: int) -> bool:
-        if not (route_dir / "camera" / "rgb_front" / f"{frame:05d}.jpg").is_file():
+        if not _has_frame_file(_image_dir(route_dir), frame, ".jpg"):
             return False
-        if not (route_dir / "lidar" / f"{frame:05d}.laz").is_file():
+        if not _has_frame_file(route_dir / "lidar", frame, ".laz"):
             return False
         if self.target_mode == TARGET_MODE_FUTURE_EGO_TIME:
             for offset in range(self.future_stride, self.future_stride * (self.num_poses + 1), self.future_stride):
-                if not (route_dir / "anno" / f"{frame + offset:05d}.json.gz").is_file():
+                if not _has_frame_file(_annotation_dir(route_dir), frame + offset, ".json.gz"):
                     return False
         elif self.target_mode == TARGET_MODE_SPATIAL_PATH:
-            if not (route_dir / "anno" / f"{frame + 1:05d}.json.gz").is_file():
+            if not _has_frame_file(_annotation_dir(route_dir), frame + 1, ".json.gz"):
                 return False
         else:
             raise RuntimeError(f"Unsupported DiffusionDrive target mode: {self.target_mode}")
@@ -130,18 +172,78 @@ class Bench2DriveDiffusionDataset(Dataset):
 
 
 def _is_b2d_route(path: Path) -> bool:
-    return (
-        path.is_dir()
-        and (path / "camera" / "rgb_front").is_dir()
-        and (path / "lidar").is_dir()
-        and (path / "anno").is_dir()
-    )
+    return path.is_dir() and _image_dir(path).is_dir() and (path / "lidar").is_dir() and _annotation_dir(path).is_dir()
+
+
+def _scenario_name(route_dir: Path) -> str:
+    return route_dir.parent.name
+
+
+def _round_robin_scenario_samples(
+    scenario_buckets: dict[str, List[tuple[Path, int]]],
+    max_samples: Optional[int],
+) -> List[tuple[Path, int]]:
+    samples: List[tuple[Path, int]] = []
+    scenario_names = sorted(name for name, bucket in scenario_buckets.items() if bucket)
+    if not scenario_names:
+        return samples
+
+    max_bucket_length = max(len(scenario_buckets[name]) for name in scenario_names)
+    for index in range(max_bucket_length):
+        for scenario_name in scenario_names:
+            bucket = scenario_buckets[scenario_name]
+            if index >= len(bucket):
+                continue
+            samples.append(bucket[index])
+            if max_samples is not None and len(samples) >= max_samples:
+                return samples
+    return samples
 
 
 def load_annotation(route_dir: Path, frame: int) -> dict:
-    path = route_dir / "anno" / f"{frame:05d}.json.gz"
+    path = _frame_path(_annotation_dir(route_dir), frame, ".json.gz")
     with gzip.open(path, "rt", encoding="utf-8") as file:
-        return json.load(file)
+        annotation = json.load(file)
+    return _normalize_measurement_annotation(annotation)
+
+
+def _annotation_dir(route_dir: Path) -> Path:
+    if (route_dir / "anno").is_dir():
+        return route_dir / "anno"
+    return route_dir / "measurements"
+
+
+def _image_dir(route_dir: Path) -> Path:
+    if (route_dir / "camera" / "rgb_front").is_dir():
+        return route_dir / "camera" / "rgb_front"
+    return route_dir / "rgb"
+
+
+def _frame_path(directory: Path, frame: int, suffix: str) -> Path:
+    for width in (5, 4, 0):
+        stem = str(frame) if width == 0 else f"{frame:0{width}d}"
+        path = directory / f"{stem}{suffix}"
+        if path.is_file():
+            return path
+    raise RuntimeError(f"Missing frame file in {directory}: frame={frame} suffix={suffix}")
+
+
+def _has_frame_file(directory: Path, frame: int, suffix: str) -> bool:
+    for width in (5, 4, 0):
+        stem = str(frame) if width == 0 else f"{frame:0{width}d}"
+        if (directory / f"{stem}{suffix}").is_file():
+            return True
+    return False
+
+
+def _normalize_measurement_annotation(annotation: dict) -> dict:
+    if "pos_global" in annotation and "x" not in annotation:
+        annotation = dict(annotation)
+        annotation["x"] = float(annotation["pos_global"][0])
+        annotation["y"] = float(annotation["pos_global"][1])
+        annotation.setdefault("command_far", int(annotation.get("command", annotation.get("next_command", 4))))
+        annotation.setdefault("command_near", int(annotation.get("next_command", annotation["command_far"])))
+    return annotation
 
 
 def build_camera_feature(
@@ -151,7 +253,7 @@ def build_camera_feature(
     model_image_size: tuple[int, int] = (256, 1024),
     jpeg_artifact: bool = True,
 ) -> torch.Tensor:
-    image_path = route_dir / "camera" / "rgb_front" / f"{frame:05d}.jpg"
+    image_path = _frame_path(_image_dir(route_dir), frame, ".jpg")
     camera_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if camera_bgr is None:
         raise RuntimeError(f"Failed to read image: {image_path}")
@@ -180,7 +282,7 @@ def build_lidar_feature(
     frame: int,
     config: GlobalConfig,
 ) -> torch.Tensor:
-    lidar_path = route_dir / "lidar" / f"{frame:05d}.laz"
+    lidar_path = _frame_path(route_dir / "lidar", frame, ".laz")
     lidar = laspy.read(str(lidar_path)).xyz
     lidar_hist = lidar_to_histogram_features(lidar, config)
     return torch.from_numpy(lidar_hist).float()
@@ -264,8 +366,7 @@ def build_spatial_path_target(
     origin = load_annotation(route_dir, frame)
     points = [np.zeros(2, dtype=np.float64)]
     for offset in range(1, max_future_frames + 1):
-        future_path = route_dir / "anno" / f"{frame + offset:05d}.json.gz"
-        if not future_path.is_file():
+        if not _has_frame_file(_annotation_dir(route_dir), frame + offset, ".json.gz"):
             break
         future = load_annotation(route_dir, frame + offset)
         points.append(np.asarray(ego_relative_xy(origin, future), dtype=np.float64))
@@ -345,6 +446,11 @@ def _command_direction(origin: dict) -> np.ndarray:
     for point in command_points:
         if np.linalg.norm(point) > 1e-3:
             return point
+    for key in ("target_point", "target_point_next", "aim_wp"):
+        if key in origin:
+            point = np.asarray(origin[key], dtype=np.float64)
+            if point.shape[0] >= 2 and np.linalg.norm(point[:2]) > 1e-3:
+                return point[:2]
     return np.array([1.0, 0.0], dtype=np.float64)
 
 
@@ -408,6 +514,14 @@ def _ego_vehicle_box(annotation: dict) -> Optional[dict]:
 
 
 def _ego_world2ego_matrix(annotation: dict) -> Optional[np.ndarray]:
+    if "world2ego" in annotation:
+        matrix = np.asarray(annotation["world2ego"], dtype=np.float64)
+        if matrix.shape == (4, 4):
+            return matrix
+    if "ego_matrix" in annotation:
+        ego_to_world = np.asarray(annotation["ego_matrix"], dtype=np.float64)
+        if ego_to_world.shape == (4, 4):
+            return np.linalg.inv(ego_to_world)
     ego_box = _ego_vehicle_box(annotation)
     if ego_box is None or "world2ego" not in ego_box:
         return None
@@ -418,6 +532,12 @@ def _ego_world2ego_matrix(annotation: dict) -> Optional[np.ndarray]:
 
 
 def _ego_world_location(annotation: dict) -> Optional[np.ndarray]:
+    if "ego_matrix" in annotation:
+        ego_to_world = np.asarray(annotation["ego_matrix"], dtype=np.float64)
+        if ego_to_world.shape == (4, 4):
+            return ego_to_world[:3, 3]
+    if "pos_global" in annotation:
+        return np.asarray([annotation["pos_global"][0], annotation["pos_global"][1], 0.0], dtype=np.float64)
     ego_box = _ego_vehicle_box(annotation)
     if ego_box is None:
         return None

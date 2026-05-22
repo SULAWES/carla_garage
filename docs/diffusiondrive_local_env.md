@@ -72,6 +72,13 @@
   - `target.spatial_path`: `first=2.5m`, `interval=1.0m`, `last=11.5m`
   - `epoch=0 step=1 loss=287.6801`
   - checkpoint：`/tmp/dd_train_spatial_target_smoke/smoke/checkpoint_epoch000_step0000001.pth`
+- B2D Full 原生 route 结构 smoke 通过：
+  - 测试结构：`rgb/*.jpg`、`lidar/*.laz`、`measurements/*.json.gz`
+  - 测试 route：`/home/HeavenlySU/sitp_workspace/Town12_Rep0_10_0_route0_11_08_23_53_07`
+  - 命令：`conda run -n garage_2 python team_code/train_diffusiondrive.py --root-dir /home/HeavenlySU/sitp_workspace --route-glob Town12_Rep0_10_0_route0_11_08_23_53_07 --logdir /tmp/dd_train_full_native_smoke --id smoke --epochs 1 --batch-size 1 --max-samples 2 --max-steps 1 --frame-sampling 20 --num-workers 0 --load-file ""`
+  - `Dataset samples: 2`
+  - `epoch=0 step=1 loss=249.4417`
+  - checkpoint：`/tmp/dd_train_full_native_smoke/smoke/checkpoint_epoch000_step0000001.pth`
 
 手写模型 smoke 中的 12 个未加载 tensor 主要来自 LiDAR 输入通道、status 维度和旧 `20x8` / `8x3` trajectory head。真实 agent setup 使用当前 `GlobalConfig`，LiDAR 输入通道与 checkpoint 对齐，因此只剩 11 个 mismatch；这些均与当前 `99x10x2` 迁移预期一致。
 

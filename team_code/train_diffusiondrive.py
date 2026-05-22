@@ -58,8 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--b2d-source-image-width", type=int, default=1600)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--val-max-samples", type=int, default=None)
+    parser.add_argument("--balanced-scenarios", action="store_true")
+    parser.add_argument("--max-samples-per-scenario", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--max-val-steps", type=int, default=None)
+    parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--route-glob", default="*")
     parser.add_argument("--val-route-glob", default=None)
     parser.add_argument("--log-every", type=int, default=10)
@@ -180,6 +183,8 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "target_mode": args.target_mode,
             "max_samples": args.max_samples,
             "val_max_samples": args.val_max_samples,
+            "balanced_scenarios": args.balanced_scenarios,
+            "max_samples_per_scenario": args.max_samples_per_scenario,
         },
         "target": {
             "mode": args.target_mode,
@@ -360,6 +365,61 @@ def compute_total_loss(outputs: Dict[str, torch.Tensor], dd_config: Any) -> torc
     return dd_config.trajectory_weight * outputs["trajectory_loss"]
 
 
+def format_scenario_sample_counts(counts: dict[str, int], limit: int = 12) -> str:
+    if not counts:
+        return "{}"
+    items = sorted(counts.items())
+    shown = ", ".join(f"{name}={count}" for name, count in items[:limit])
+    if len(items) > limit:
+        shown += f", ... (+{len(items) - limit} more)"
+    return shown
+
+
+def build_dataset(
+    root_dirs: list[Path],
+    args: argparse.Namespace,
+    global_config: GlobalConfig,
+    dd_config: Any,
+    frame_sampling: int,
+    max_samples: Optional[int],
+    route_glob: str,
+) -> Bench2DriveDiffusionDataset:
+    return Bench2DriveDiffusionDataset(
+        root_dirs,
+        config=global_config,
+        num_poses=dd_config.trajectory_sampling.num_poses,
+        future_stride=args.future_stride,
+        frame_sampling=frame_sampling,
+        max_samples=max_samples,
+        route_glob=route_glob,
+        model_image_size=(dd_config.camera_height, dd_config.camera_width),
+        jpeg_artifact=not args.no_jpeg_artifact,
+        target_mode=args.target_mode,
+        spatial_target_first_distance=args.spatial_target_first_distance,
+        spatial_target_interval=args.spatial_target_interval,
+        spatial_target_max_future_frames=args.spatial_target_max_future_frames,
+        balanced_scenarios=args.balanced_scenarios,
+        max_samples_per_scenario=args.max_samples_per_scenario,
+    )
+
+
+def build_dataloader(
+    dataset: Bench2DriveDiffusionDataset,
+    args: argparse.Namespace,
+    device: torch.device,
+    shuffle: bool,
+    drop_last: bool,
+) -> DataLoader:
+    return DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.num_workers,
+        pin_memory=device.type == "cuda",
+        drop_last=drop_last,
+    )
+
+
 @torch.no_grad()
 def evaluate(
     model: torch.nn.Module,
@@ -372,6 +432,7 @@ def evaluate(
     model.eval()
     total_loss = 0.0
     total_trajectory_loss = 0.0
+    total_loss_dict: Dict[str, float] = {}
     count = 0
     for batch in dataloader:
         features, targets = move_features_to_device(batch, device)
@@ -379,6 +440,8 @@ def evaluate(
         total = compute_total_loss(outputs, dd_config)
         total_loss += float(total.detach().cpu())
         total_trajectory_loss += float(outputs["trajectory_loss"].detach().cpu())
+        for name, value in outputs.get("trajectory_loss_dict", {}).items():
+            total_loss_dict[name] = total_loss_dict.get(name, 0.0) + float(value.detach().cpu())
         count += 1
         if max_steps is not None and count >= max_steps:
             break
@@ -388,6 +451,7 @@ def evaluate(
     return {
         "loss": total_loss / denom,
         "trajectory_loss": total_trajectory_loss / denom,
+        **{name: value / denom for name, value in sorted(total_loss_dict.items())},
         "steps": float(count),
     }
 
@@ -413,6 +477,34 @@ def load_training_checkpoint(
         flush=True,
     )
     return start_epoch, global_step
+
+
+def load_model_for_eval(model: torch.nn.Module, args: argparse.Namespace, device: torch.device) -> None:
+    if args.resume_file:
+        checkpoint = torch.load(args.resume_file, map_location=device, weights_only=False)
+        if "model" not in checkpoint:
+            raise RuntimeError(f"Eval checkpoint does not contain a 'model' state: {args.resume_file}")
+        model.load_state_dict(checkpoint["model"], strict=True)
+        print(f"Loaded eval model from training checkpoint: {args.resume_file}", flush=True)
+        return
+    if args.load_file:
+        load_checkpoint_partial(model, args.load_file, device)
+        return
+    raise RuntimeError("Eval-only mode requires --resume-file for a training checkpoint or --load-file for model weights.")
+
+
+def print_metrics(prefix: str, metrics: Dict[str, float]) -> None:
+    loss_parts = ", ".join(
+        f"{name}={value:.4f}"
+        for name, value in sorted(metrics.items())
+        if name not in {"loss", "trajectory_loss", "steps"}
+    )
+    suffix = f" {loss_parts}" if loss_parts else ""
+    print(
+        f"{prefix} loss={metrics['loss']:.4f} "
+        f"trajectory_unweighted={metrics['trajectory_loss']:.4f} steps={int(metrics['steps'])}{suffix}",
+        flush=True,
+    )
 
 
 def save_checkpoint(
@@ -462,56 +554,57 @@ def main() -> None:
     apply_runtime_training_overrides(dd_config, args)
     write_run_config(output_dir, args, global_config, dd_config)
 
-    dataset = Bench2DriveDiffusionDataset(
+    if args.eval_only:
+        eval_root_dirs = args.val_root_dir or args.root_dir
+        eval_frame_sampling = args.val_frame_sampling or args.frame_sampling
+        eval_max_samples = args.val_max_samples if args.val_root_dir else args.max_samples
+        eval_route_glob = args.val_route_glob or args.route_glob
+        eval_dataset = build_dataset(
+            eval_root_dirs,
+            args,
+            global_config,
+            dd_config,
+            frame_sampling=eval_frame_sampling,
+            max_samples=eval_max_samples,
+            route_glob=eval_route_glob,
+        )
+        eval_dataloader = build_dataloader(eval_dataset, args, device, shuffle=False, drop_last=False)
+        print(f"Eval samples: {len(eval_dataset)}", flush=True)
+        print(f"Eval scenario samples: {format_scenario_sample_counts(eval_dataset.scenario_sample_counts)}", flush=True)
+        print(f"Output dir: {output_dir}", flush=True)
+
+        model = V2TransfuserModel(dd_config).to(device)
+        load_model_for_eval(model, args, device)
+        metrics = evaluate(model, eval_dataloader, device, dd_config, args.max_val_steps)
+        print_metrics("eval", metrics)
+        return
+
+    dataset = build_dataset(
         args.root_dir,
-        config=global_config,
-        num_poses=dd_config.trajectory_sampling.num_poses,
-        future_stride=args.future_stride,
+        args,
+        global_config,
+        dd_config,
         frame_sampling=args.frame_sampling,
         max_samples=args.max_samples,
         route_glob=args.route_glob,
-        model_image_size=(dd_config.camera_height, dd_config.camera_width),
-        jpeg_artifact=not args.no_jpeg_artifact,
-        target_mode=args.target_mode,
-        spatial_target_first_distance=args.spatial_target_first_distance,
-        spatial_target_interval=args.spatial_target_interval,
-        spatial_target_max_future_frames=args.spatial_target_max_future_frames,
     )
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
-        drop_last=args.drop_last,
-    )
+    dataloader = build_dataloader(dataset, args, device, shuffle=True, drop_last=args.drop_last)
     val_dataloader = None
     if args.val_root_dir:
-        val_dataset = Bench2DriveDiffusionDataset(
+        val_dataset = build_dataset(
             args.val_root_dir,
-            config=global_config,
-            num_poses=dd_config.trajectory_sampling.num_poses,
-            future_stride=args.future_stride,
+            args,
+            global_config,
+            dd_config,
             frame_sampling=args.val_frame_sampling or args.frame_sampling,
             max_samples=args.val_max_samples,
             route_glob=args.val_route_glob or args.route_glob,
-            model_image_size=(dd_config.camera_height, dd_config.camera_width),
-            jpeg_artifact=not args.no_jpeg_artifact,
-            target_mode=args.target_mode,
-            spatial_target_first_distance=args.spatial_target_first_distance,
-            spatial_target_interval=args.spatial_target_interval,
-            spatial_target_max_future_frames=args.spatial_target_max_future_frames,
         )
-        val_dataloader = DataLoader(
-            val_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            pin_memory=device.type == "cuda",
-            drop_last=False,
-        )
+        val_dataloader = build_dataloader(val_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Validation samples: {len(val_dataset)}", flush=True)
+        print(f"Validation scenario samples: {format_scenario_sample_counts(val_dataset.scenario_sample_counts)}", flush=True)
     print(f"Dataset samples: {len(dataset)}", flush=True)
+    print(f"Dataset scenario samples: {format_scenario_sample_counts(dataset.scenario_sample_counts)}", flush=True)
     print(f"Output dir: {output_dir}", flush=True)
 
     model = V2TransfuserModel(dd_config).to(device)
@@ -561,11 +654,7 @@ def main() -> None:
 
             if val_dataloader is not None and args.val_every_steps > 0 and global_step % args.val_every_steps == 0:
                 metrics = evaluate(model, val_dataloader, device, dd_config, args.max_val_steps)
-                print(
-                    f"validation step={global_step} loss={metrics['loss']:.4f} "
-                    f"trajectory_unweighted={metrics['trajectory_loss']:.4f} steps={int(metrics['steps'])}",
-                    flush=True,
-                )
+                print_metrics(f"validation step={global_step}", metrics)
 
             if args.save_every_steps > 0 and global_step % args.save_every_steps == 0:
                 save_checkpoint(output_dir, model, optimizer, scheduler, epoch, global_step, args, dd_config)
@@ -576,11 +665,7 @@ def main() -> None:
 
     if val_dataloader is not None and args.val_every_steps == 0:
         metrics = evaluate(model, val_dataloader, device, dd_config, args.max_val_steps)
-        print(
-            f"validation final loss={metrics['loss']:.4f} "
-            f"trajectory_unweighted={metrics['trajectory_loss']:.4f} steps={int(metrics['steps'])}",
-            flush=True,
-        )
+        print_metrics("validation final", metrics)
     save_checkpoint(output_dir, model, optimizer, scheduler, args.epochs - 1, global_step, args, dd_config)
 
 

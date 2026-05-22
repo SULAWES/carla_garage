@@ -10,6 +10,7 @@
   - `camera/rgb_front/*.jpg`
   - `lidar/*.laz`
   - `anno/*.json.gz`
+  - 或 B2D Full 原生 `rgb/*.jpg`、`lidar/*.laz`、`measurements/*.json.gz`
 
 当前训练和后续主要修改以 B2D Full raw 数据为主训练分布。sensor / time / preprocessing contract 见 `b2d_full_sensor_contract.md`。
 
@@ -29,7 +30,9 @@
 - diffusion：`--diffusion-num-train-timesteps`、`--diffusion-train-timestep-min/max`、`--diffusion-infer-step-num`、`--diffusion-infer-timestep-span`、`--diffusion-infer-trunc-timesteps`
 - data split：`--val-root-dir`、`--val-route-glob`、`--val-frame-sampling`、`--val-max-samples`、`--val-every-steps`、`--max-val-steps`
 - dataset / target / time contract：`--dataset-mode`、`--target-mode`、`--spatial-target-first-distance`、`--spatial-target-interval`、`--spatial-target-max-future-frames`、`--assumed-frame-interval`、`--future-stride`、`--b2d-source-image-height`、`--b2d-source-image-width`
+- scenario balancing：`--balanced-scenarios`、`--max-samples-per-scenario`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
+- evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载
 
 ## Status Feature 与 Extra Sensors
 
@@ -128,19 +131,43 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
   --resume-file /tmp/dd_train_smoke_config/smoke_val/latest.pth
 ```
 
-## Full 数据集示例
-
-远程 B2D Full 数据集只需要替换 `--root-dir` 和 `--logdir`。默认 `--dataset-mode b2d_full_raw`、`--target-mode spatial_path`、`--assumed-frame-interval 0.1`，训练配置会记录这些假设：
+eval-only 示例：
 
 ```bash
 conda run -n garage_2 python team_code/train_diffusiondrive.py \
-  --root-dir /path/to/Bench2Drive-full-extracted \
+  --root-dir Bench2Drive/Bench2Drive-mini-extracted \
+  --val-root-dir Bench2Drive/Bench2Drive-mini-extracted \
+  --logdir /tmp/dd_train_smoke_config \
+  --id eval_only \
+  --eval-only \
+  --batch-size 1 \
+  --val-max-samples 1 \
+  --max-val-steps 1 \
+  --frame-sampling 20 \
+  --num-workers 0 \
+  --resume-file /tmp/dd_train_smoke_config/smoke_val/latest.pth
+```
+
+`--eval-only` 的评估数据优先使用 `--val-root-dir`；未提供时会回退到 `--root-dir`。输出形如：
+
+```text
+eval loss=... trajectory_unweighted=... steps=... trajectory_loss_0=... trajectory_loss_1=...
+```
+
+## Full 数据集示例
+
+远程 B2D Full 数据集只需要替换 `--root-dir` 和 `--logdir`。如果数据是 `scenario/route` 两层结构，例如 `carla_dataset/Accident/Town13_.../`，需要加 `--route-glob "*/*"`。默认 `--dataset-mode b2d_full_raw`、`--target-mode spatial_path`、`--assumed-frame-interval 0.1`，训练配置会记录这些假设：
+
+```bash
+conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
+  --root-dir /path/to/carla_dataset \
+  --route-glob "*/*" \
   --logdir /path/to/logs \
   --id dd_carla_native_v1 \
   --epochs 20 \
   --batch-size 4 \
   --frame-sampling 5 \
-  --num-workers 8 \
+  --num-workers 6 \
   --scheduler cosine \
   --warmup-steps 1000 \
   --save-every-steps 1000
@@ -154,9 +181,88 @@ conda run -n garage_2 python team_code/train_diffusiondrive.py \
 
 脚本会按 key 和 shape 部分加载 checkpoint；当前 `99x10x2` trajectory head 相关 mismatch 属于预期。
 
+Full checkpoint eval-only 示例：
+
+```bash
+conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset \
+  --val-root-dir /share/home/u19666033/djy/carla_dataset/Accident \
+  --route-glob "*/*" \
+  --val-route-glob "*" \
+  --logdir ~/ltr/dd_logs/full_eval \
+  --id accident_eval \
+  --eval-only \
+  --batch-size 16 \
+  --val-frame-sampling 10 \
+  --val-max-samples 512 \
+  --max-val-steps 50 \
+  --num-workers 6 \
+  --device cuda:0 \
+  --resume-file ~/ltr/dd_logs/full_stage1/spatial_path_bs16_lr1e-4/latest.pth
+```
+
+## Scenario-Balanced Training
+
+远端 B2D Full 数据是 `scenario/route` 两层结构时，普通 `--max-samples` 会按排序后的 route 顺序截断，容易偏向前几个 scenario。`NonSignalizedJunctionLeftTurn` 的单场景 finetune probe 已显示该类场景主要是覆盖不足：stage1 eval `trajectory_unweighted=11.3806`，单场景 finetune 后验证降到约 `4.4306`。
+
+为避免顺序截断偏置，训练入口支持：
+
+- `--balanced-scenarios`：按 `route_dir.parent.name` 分桶，并 round-robin 合并各 scenario 样本
+- `--max-samples-per-scenario`：每个 scenario 最多保留的样本数
+
+quick balanced stage 示例：
+
+```bash
+conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset \
+  --route-glob "*/*" \
+  --logdir ~/ltr/dd_logs/full_stage2 \
+  --id balanced_spatial_path_bs16_256ps \
+  --epochs 20 \
+  --batch-size 16 \
+  --frame-sampling 5 \
+  --balanced-scenarios \
+  --max-samples-per-scenario 256 \
+  --num-workers 6 \
+  --scheduler cosine \
+  --warmup-steps 1000 \
+  --min-lr 1e-6 \
+  --save-every-steps 1000 \
+  --log-every 50 \
+  --lr 1e-4 \
+  --weight-decay 1e-4 \
+  --device cuda:0 \
+  --load-file ""
+```
+
+训练日志会打印 `Dataset scenario samples`，`training_config.json` 会记录 `balanced_scenarios` 和 `max_samples_per_scenario`。
+
+## Eval Error Inspection
+
+`tools/inspect_diffusiondrive_eval_errors.py` 用于定位高误差样本。它输出的是模型推理轨迹和 target 之间的 per-sample 诊断误差，不是训练里的 batch-reduced focal + regression loss。
+
+示例：
+
+```bash
+conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+  --route-glob "*" \
+  --checkpoint ~/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth \
+  --top-k 50 \
+  --max-samples 1024 \
+  --frame-sampling 5 \
+  --batch-size 16 \
+  --num-workers 6 \
+  --device cuda:0 \
+  --output-csv ~/ltr/dd_logs/full_eval_stage2/nsj_left_errors.csv
+```
+
+输出包括 `l1 / ade / fde` 的 mean / median / p90 / p95 / max，以及 top-k 样本的 `scenario / route / frame / speed / command / target_path_length / target_end / pred_end`。
+
 ## 当前限制
 
 - B2D Full raw 图像通常是 `900x1600`。当前 dataset 会先 resize 到在线 garage sensor size `512x1024`，再执行 `crop_array -> 256x1024`。这会对齐模型输入 shape，但不消除 B2D Full raw sensor 与在线 garage sensor suite 的 FOV / pose / LiDAR 外参 gap。
+- dataset helper 兼容早期 `camera/rgb_front + anno` 和 Full 原生 `rgb + measurements` 两种 route 结构；Full 原生逐帧标注来自 `measurements/*.json.gz`，不是 `records.json.gz`。
 - 默认 trajectory target 已切换为 `spatial_path`：从 future ego path 中按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样，使 target 与当前 `99x10x2` anchor 的空间 checkpoint 语义一致。
 - `spatial_path` 样本发现至少要求下一帧 annotation 存在；future path 不足覆盖 `11.5m` 时才沿路径末段或 command 方向外推。
 - `future_stride` 只用于 `--target-mode future_ego_time` legacy 路径；默认训练不再把 target 点解释为固定时间间隔。

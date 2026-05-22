@@ -10,11 +10,22 @@
 
 ## B2D Full Raw 输入事实
 
-当前数据 helper 读取原始 Bench2Drive route 目录：
+当前数据 helper 支持两种 Bench2Drive route 目录结构。
+
+早期 / mini smoke 格式：
 
 - `camera/rgb_front/*.jpg`
 - `lidar/*.laz`
 - `anno/*.json.gz`
+
+B2D Full 原生格式：
+
+- `rgb/*.jpg`
+- `lidar/*.laz`
+- `measurements/*.json.gz`
+- `records.json.gz` / `results.json.gz` 是 route 级元数据，当前不作为逐帧训练标注读取
+
+远端 Full 数据通常是 scenario / route 两层结构，例如 `carla_dataset/Accident/Town13_.../`；训练时应使用 `--route-glob "*/*"`。
 
 当前已知 raw sensor 几何：
 
@@ -80,7 +91,7 @@ anchor 估计语义：
 当前 dataset target 构造：
 
 - 样本发现阶段要求 `spatial_path` 至少存在下一帧 annotation，避免 route 末尾完全无未来 ego path 时纯靠 command 生成训练标签
-- 从当前 frame 后续 ego vehicle world location 构成 future ego path
+- 从当前 frame 后续 ego vehicle world location 构成 future ego path；Full 原生 `measurements` 使用 `pos_global` 和 `ego_matrix`，其中 `ego_matrix` 会取逆得到 `world2ego`
 - 将 future path 转到当前 ego frame
 - 按距离重采样为 `2.5m, 3.5m, ..., 11.5m`
 - 若 future path 不足，沿最后路径方向外推；若几乎无路径方向，则用 `command_far / command_near` 方向外推
@@ -104,6 +115,7 @@ anchor 估计语义：
 ## 后续建议
 
 1. full training 前先在 B2D Full 上跑小 smoke 和吞吐量测试。
-2. 抽样可视化 raw image、preprocessed image、LiDAR BEV 和 target trajectory。
-3. 针对空间 checkpoint target，重新核对 PID desired speed 的 waypoint 间隔假设。
-4. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。
+2. B2D Full 采用 `scenario/route` 两层结构时，优先用 `--balanced-scenarios` 和 `--max-samples-per-scenario` 避免按目录排序截断导致的场景偏置。
+3. 抽样可视化 raw image、preprocessed image、LiDAR BEV 和 target trajectory。
+4. 针对空间 checkpoint target，重新核对 PID desired speed 的 waypoint 间隔假设。
+5. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。

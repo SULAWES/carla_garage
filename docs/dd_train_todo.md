@@ -2,7 +2,7 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-05-20
+**更新日期**: 2026-05-21
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
@@ -46,10 +46,12 @@
 - [ ] **数据集生成规范**
   - [x] 明确当前训练主线以 B2D Full raw 数据为主，不把它仅作为 smoke / 预训练材料
   - [x] 初步记录 B2D Full raw camera / LiDAR sensor contract，见 `b2d_full_sensor_contract.md`
+  - [x] dataset helper 兼容 B2D Full 原生 `rgb + measurements` route 结构，以及早期 `camera/rgb_front + anno` 结构
+  - [x] 增加 scenario-balanced discovery：`--balanced-scenarios` 按 `route_dir.parent.name` 分桶并 round-robin 合并，`--max-samples-per-scenario` 限制每类场景样本数
   - [ ] 明确 B2D Full raw sensor 与在线 `DiffusionDriveAgent` sensor suite 的 gap 是否需要在推理侧对齐或单独做 domain adaptation
   - [ ] 明确 camera FOV / pose、LiDAR pose / yaw / range 与在线 agent 的一致性验证标准
   - [ ] 明确数据保存频率和时序长度
-  - [ ] 明确训练 / 验证 / 测试切分方式
+  - [ ] 明确正式训练 / 验证 / 测试切分方式；当前已有多 scenario eval-only probe，`NonSignalizedJunctionLeftTurn` 对顺序截断较敏感
 
 - [x] **最小训练入口**
   - [x] 新增 `team_code/train_diffusiondrive.py`
@@ -61,6 +63,8 @@
   - [x] 训练入口支持 optimizer / scheduler / warmup 配置
   - [x] 训练入口支持 trajectory loss weights、focal alpha/gamma 和 diffusion timestep 配置
   - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
+  - [x] 训练入口支持 `--eval-only`，可从训练 checkpoint 只加载 `model` 跑验证集
+  - [x] 训练入口支持 scenario-balanced 采样参数，并在日志中打印 scenario sample counts
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset

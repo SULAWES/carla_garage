@@ -14,6 +14,7 @@
 - [b2d_full_sensor_contract.md](b2d_full_sensor_contract.md)：Bench2Drive Full 主训练分布的 sensor / time / preprocessing contract。
 - [diffusiondrive_anchor_adaptation.md](diffusiondrive_anchor_adaptation.md)：最新 `99x10x2` anchor 的适配路线。
 - [diffusiondrive_training.md](diffusiondrive_training.md)：当前 CARLA-native DiffusionDrive 训练入口和 smoke 命令。
+- [diffusiondrive_remote_training_progress.md](diffusiondrive_remote_training_progress.md)：远端 B2D Full 训练阶段、eval 结果和高误差样本诊断。
 - [diffusiondrive_local_env.md](diffusiondrive_local_env.md)：当前本机 `garage_2` 环境和 smoke test 结果。
 
 ### 背景和工程说明
