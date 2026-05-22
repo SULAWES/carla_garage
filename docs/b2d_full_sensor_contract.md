@@ -117,5 +117,5 @@ anchor 估计语义：
 1. full training 前先在 B2D Full 上跑小 smoke 和吞吐量测试。
 2. B2D Full 采用 `scenario/route` 两层结构时，优先用 `--balanced-scenarios` 和 `--max-samples-per-scenario` 避免按目录排序截断导致的场景偏置。
 3. 抽样可视化 raw image、preprocessed image、LiDAR BEV 和 target trajectory。
-4. 针对空间 checkpoint target，重新核对 PID desired speed 的 waypoint 间隔假设。
+4. 针对空间 checkpoint target，推理侧已默认启用空间 PID；后续需要通过闭环评测调参 slow / fast 速度和 turn threshold。
 5. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。

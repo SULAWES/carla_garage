@@ -4,6 +4,8 @@ Env vars:
   - DIFFUSIONDRIVE_CHECKPOINT: path to model weights (.pth/.ckpt).
   - DIFFUSIONDRIVE_ANCHOR_PATH: path to plan anchor .npy file (required).
   - DIFFUSIONDRIVE_BACKBONE_PATH: optional timm backbone weights.
+  - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
+  - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
 """
 
 import os
@@ -68,6 +70,13 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             )
         print("Use JPEG artifact in DiffusionDrive image preprocessing:", self.apply_jpeg_artifact)
         print("DiffusionDrive image normalization:", self.image_normalization)
+        self.use_command_delay = strtobool(os.environ.get("DIFFUSIONDRIVE_COMMAND_DELAY", "0"))
+        self.use_spatial_pid = strtobool(os.environ.get(
+            "DIFFUSIONDRIVE_SPATIAL_PID",
+            str(int(bool(self.config.diffusiondrive_spatial_pid))),
+        ))
+        print("DiffusionDrive command delay:", self.use_command_delay)
+        print("DiffusionDrive spatial PID:", self.use_spatial_pid)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
@@ -369,7 +378,8 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         if (target_point != self.target_point_prev).all():
             self.target_point_prev = target_point
             self.commands.append(far_command.value)
-        one_hot_command = t_u.command_to_one_hot(self.commands[-2])
+        command_value = self.commands[-2] if self.use_command_delay else far_command.value
+        one_hot_command = t_u.command_to_one_hot(command_value)
         result['command'] = torch.from_numpy(one_hot_command[np.newaxis]).to(self.device, dtype=torch.float32)
 
         ego_target_point = t_u.inverse_conversion_2d(target_point[:2], result['gps'], result['compass'])
@@ -413,9 +423,13 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         waypoints = waypoints[0].detach().cpu().numpy()
         speed = float(speed)
 
-        one_second = int(self.config.carla_fps // (self.config.wp_dilation * self.config.data_save_freq))
-        half_second = max(1, one_second // 2)
-        desired_speed = np.linalg.norm(waypoints[half_second - 1] - waypoints[one_second - 1]) * 2.0
+        if self.use_spatial_pid:
+            desired_speed = self._spatial_path_desired_speed(waypoints)
+        else:
+            one_second = int(self.config.carla_fps // (self.config.wp_dilation * self.config.data_save_freq))
+            one_second = min(max(one_second, 1), waypoints.shape[0])
+            half_second = min(max(1, one_second // 2), waypoints.shape[0])
+            desired_speed = np.linalg.norm(waypoints[half_second - 1] - waypoints[one_second - 1]) * 2.0
 
         if desired_speed < 1e-4:
             desired_speed = 0.0
@@ -448,6 +462,32 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         steer = np.clip(steer, -1.0, 1.0)
 
         return steer, throttle, brake
+
+    def _spatial_path_desired_speed(self, waypoints):
+        """Estimate a cautious target speed from spatial checkpoints."""
+        if waypoints.shape[0] == 0:
+            return 0.0
+
+        endpoint = waypoints[-1]
+        endpoint_distance = float(np.linalg.norm(endpoint))
+        if endpoint_distance < self.config.brake_speed:
+            return 0.0
+
+        turn_ratio = abs(float(endpoint[1])) / max(endpoint_distance, 1e-4)
+        turn_threshold = self.config.diffusiondrive_spatial_pid_turn_threshold
+        sharp_turn_threshold = self.config.diffusiondrive_spatial_pid_sharp_turn_threshold
+        if sharp_turn_threshold <= turn_threshold:
+            turn_slowdown = float(turn_ratio >= turn_threshold)
+        else:
+            turn_slowdown = np.clip(
+                (turn_ratio - turn_threshold) / (sharp_turn_threshold - turn_threshold),
+                0.0,
+                1.0,
+            )
+
+        speed_fast = self.config.diffusiondrive_spatial_pid_speed_fast
+        speed_slow = self.config.diffusiondrive_spatial_pid_speed_slow
+        return float(speed_fast * (1.0 - turn_slowdown) + speed_slow * turn_slowdown)
 
     def _stop_sign_controller_step(self, ego_speed: float) -> bool:
         """Force a full stop when approaching a route-relevant stop sign."""

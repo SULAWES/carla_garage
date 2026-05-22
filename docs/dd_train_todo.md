@@ -36,8 +36,8 @@
   - [x] 用 ego vehicle `world2ego` / `location` 抽样复核 `ego_relative_xy()`；mini 抽样 92 对 frame 的矩阵目标误差为 `0`
   - [x] 明确默认 trajectory target 采用 `spatial_path`：从 future ego path 按 `2.5m + 1.0m` 空间距离重采样
   - [x] 明确 anchor 是空间 checkpoint 语义，不是固定时间间隔 trajectory
-  - [ ] 明确 `trajectory_sampling.interval_length` 是否保留为兼容字段，或后续改为显式空间 checkpoint config
-  - [ ] 明确 PID waypoint 间隔假设是否需要按空间 checkpoint target 改写
+  - [x] 明确 `trajectory_sampling.interval_length` 当前保留为兼容字段，不代表默认 `spatial_path` target 的真实时间间隔
+  - [x] 推理侧默认改用空间 checkpoint PID，不再按 0.5s / 1.0s waypoint index 估计 desired speed
   - [x] 明确 anchor 生成方式与数组形状
   - [x] 校验最新 `99x10x2` anchor 与源 JSON 一致，并记录直接升级路线，见 `diffusiondrive_anchor_adaptation.md`
   - [x] 明确 heading 不由轨迹 head 预测，主轨迹接口固定为 XY
@@ -76,7 +76,7 @@
   - [x] 明确 syb / garage `extra_sensors` 对应的是 `speed(1) + command_one_hot(6)`，不是 DD 旧实现的 `10` 维 status
   - [x] 明确设计方向：DD 只保留 `status_feature` 入口，不额外引入旧模型式独立 `extra_sensors` 分支
   - [x] 实现推荐 schema：`status_feature = command_one_hot(6) + speed(1)`
-  - [ ] 明确训练使用当前 command 还是推理侧延迟一拍的 `commands[-2]`
+  - [x] 训练 / 推理默认统一使用当前 command；推理侧旧 `commands[-2]` 延迟逻辑保留为 `DIFFUSIONDRIVE_COMMAND_DELAY=1` fallback
   - [x] 将训练侧和推理侧改为共用同一份 status builder，避免 schema 分叉
   - [x] 迁移时删除 / 废弃 acceleration 输入；旧实现中训练用 IMU `acceleration[0]`、推理用 speed finite difference，二者不一致
   - [ ] 明确 speed 是否归一化；syb 旧模型通过 `BatchNorm1d(1, affine=False)` 处理速度，DD 迁移时需要单独决策
@@ -116,7 +116,7 @@
 
 - [ ] **评测与控制闭环设计**
   - [ ] 明确训练完成后继续用 waypoint PID 还是改控制器
-  - [ ] 当前 target / anchor 是空间 checkpoint 语义，重写或复核 `_control_pid()` 中 desired speed 的 waypoint 索引/距离假设
+  - [x] 当前 target / anchor 是空间 checkpoint 语义，`DiffusionDriveAgent` 默认空间 PID 已不再用 waypoint 时间索引估计 desired speed
   - [ ] 明确训练指标与 leaderboard 指标的对齐方式
 
 - [ ] **训练工程可复现性**
@@ -191,7 +191,7 @@
   - Bench2Drive LiDAR: `x=-0.39,z=1.84,yaw=0,range=85`
   - garage LiDAR: `x=0,z=2.5,yaw=-90`
 - 旧 `status_feature` 中 acceleration 训练/推理不一致。训练 helper 用 IMU `acceleration[0]`，推理 agent 用 speed finite difference；mini 上二者相关性约 `0.23`。当前已移除 acceleration 输入。
-- command 当前训练用 `command_far`，推理用 `commands[-2]`，存在一拍时序差异。
+- command 训练 / 推理默认统一为当前 command；推理侧旧 `commands[-2]` 一拍延迟保留为环境变量 fallback。
 
 **直接建议**：
 
@@ -212,7 +212,7 @@
 
 **至少要明确**：
 
-- command 用几维，以及训练 command 是否要模拟推理侧 `commands[-2]` 延迟
+- command 用 6 维 one-hot，默认训练 / 推理都使用当前 command；旧 `commands[-2]` 延迟只作为推理侧 ablation
 - speed 是否归一化
 - acceleration 已移除
 - syb / garage `extra_sensors` 的 7 维设计已吸收到 DD 的 `status_feature`

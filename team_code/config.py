@@ -555,6 +555,15 @@ class GlobalConfig:
     self.clip_delta = 1.0  # maximum change in speed input to longitudinal controller
     self.clip_throttle = 1.0  # Maximum throttle allowed by the controller
 
+    # DiffusionDrive currently predicts spatial checkpoints rather than
+    # fixed-time waypoints, so its PID speed target should not be inferred from
+    # waypoint index intervals.
+    self.diffusiondrive_spatial_pid = True
+    self.diffusiondrive_spatial_pid_speed_fast = 5.0
+    self.diffusiondrive_spatial_pid_speed_slow = 2.0
+    self.diffusiondrive_spatial_pid_turn_threshold = 0.28
+    self.diffusiondrive_spatial_pid_sharp_turn_threshold = 0.55
+
     # Numbers for the lateral PID controller
     self.lateral_k_p = 3.118357247806046
     self.lateral_k_d = 1.3782508892109167

@@ -6,6 +6,8 @@
 > **基线代码**：
 > - 原版：`./DiffusionDrive/navsim/agents/diffusiondrive/` (commit 以当前工作区为准)
 > - CARLA Port：`./carla_garage/team_code/diffusiondrive_agent.py`、`./carla_garage/team_code/diffusiondrive/`
+>
+> **状态说明**：本文最初用于记录 port 早期 gap。`99x10x2` anchor、XY-only trajectory head、7 维 `status_feature`、空间 checkpoint PID 等当前主线事实，以 `diffusiondrive_anchor_adaptation.md`、`diffusiondrive_training.md` 和 `dd_train_todo.md` 为准。
 
 ---
 
@@ -58,7 +60,7 @@
 
 ---
 
-## 3. 轨迹表示：处于 "2D anchor + 3D 输出" 的半对齐状态
+## 3. 轨迹表示：CARLA 主线已升级为 `99x10x2` / XY-only
 
 ### 原版 NAVSIM
 - `plan_anchor` 形状：`(20, 8, 2)`，仅含 `(x, y)`。
@@ -69,34 +71,30 @@
 - 模型输出 `poses_reg` 为 `(bs, 20, 8, 3)`，最终 best mode 取 `(x, y, heading)`。
 
 ### 当前 CARLA Port
-- `plan_anchor` 同样是 `(20, 8, 2)`。
-- 仓库中另外已经提取出一份新的聚类 anchor：`4-0-0-1910-tracked_clusters_anchor.npy`，其 shape 为 `99x10x2`。
-- 这份新 anchor 来源于 `4-0-0-1910-tracked_clusters.json` 中的 `99` 个 cluster；每个 cluster 的 `mu` 都是一条拉直后的 `10` 个路点 `(x, y)` 轨迹，也就是一个 `20D` 向量。
-- 由于当前运行链路仍按 `20x8x2` 组织 mode 数和时间步长度，这份 `99x10x2` anchor 目前不能直接替换现有 `plan_anchor.npy`。
-- **但 `model.py` 中的 `norm_odo` / `denorm_odo` 被改成了 2D**，去掉了 heading 的归一化：
+- 当前主线 `plan_anchor` 已升级为 `99x10x2`，对应 `4-0-0-1910-tracked_clusters_anchor.npy`。
+- 这份新 anchor 来源于 `4-0-0-1910-tracked_clusters.json` 中的 `99` 个 cluster；每个 cluster 的 `mu` 都是一条拉直后的 `10` 个空间 checkpoint `(x, y)` 轨迹，也就是一个 `20D` 向量。
+- 当前模型、loss、训练 target 和推理控制入口已经围绕 `99x10x2` / XY-only 轨迹组织。
+- **`model.py` 中的 `norm_odo` / `denorm_odo` 被改成了 2D**，去掉了 heading 的归一化：
   ```python
   def norm_odo(self, odo_info_fut):
       # 仅处理 x, y
       return torch.cat([x_normed, y_normed], dim=-1)  # 2D
   ```
-- **然而 `DiffMotionPlanningRefinementModule.plan_reg_branch` 仍然输出 `ego_fut_ts * 3`**，即 `poses_reg` 仍是 `(bs, 20, 8, 3)`。
-- **在 Agent 侧**，`diffusiondrive_agent.py` 只取 `traj[:, :, :2]` 送入 PID 控制器，heading 维度被直接丢弃。
+- **`DiffMotionPlanningRefinementModule.plan_reg_branch` 当前输出 `ego_fut_ts * 2`**，即 DD CARLA 主线不再预测 heading。
+- **在 Agent 侧**，`diffusiondrive_agent.py` 将模型输出的 `(x, y)` waypoints 送入空间 checkpoint PID。
 - **来源文件**：
   - `carla_garage/team_code/diffusiondrive/model.py:432-447`
   - `carla_garage/team_code/diffusiondrive/model.py:501-555` (forward_test)
   - `carla_garage/team_code/diffusiondrive_agent.py:525`
 
 ### 差异影响
-1. **Diffusion Scheduler 的行为不一致**：在 `forward_test` 中，`x_start = poses_reg[...,:2]` 被 `norm_odo` 后送入 `DDIMScheduler.step()`。但模型内部仍然计算并输出 heading，这个 heading 维度既没有被 `norm_odo` 约束，也没有参与 diffusion 的去噪迭代。它只是在 `CustomTransformerDecoderLayer` 中通过 `tanh() * np.pi` 截断。
-2. **若加载原版权重**：原版 `norm_odo` 期望 3D 输入，而 CARLA 版 `norm_odo` 只接受 2D。虽然当前 CARLA `model.py` 的 `norm_odo` 被手动改了，但如果未来需要合并原版更新，这个差异会成为 merge conflict 的隐患。
-3. **若重新训练**：必须统一决定采用 `8×2`（仅 x,y）还是 `8×3`（x,y,heading）。
-   - 若采用 `8×2`：应将 `plan_reg_branch` 的最后一层改为 `ego_fut_ts * 2`，并同步修改 `CustomTransformerDecoderLayer` 和 `LossComputer`。
-   - 若采用 `8×3`：应恢复 `norm_odo` 的 heading 分支，并在 Agent 侧利用 heading 做更贴合轨迹朝向的控制。
-4. **若接入新聚类 anchor**：还会额外引入 `20 -> 99` 个 mode 和 `8 -> 10` 个 pose 两处接口变化，影响轨迹头、loss、checkpoint 对齐和控制链路。
+1. **若加载原版权重**：原版 `norm_odo` 期望 3D 输入，而 CARLA 版 `norm_odo` 只接受 2D；旧 checkpoint 的 trajectory head / anchor 相关权重应预期 shape mismatch。
+2. **若合并原版更新**：NAVSIM 原版仍保留 heading 维度和 `20x8x2` anchor 假设，和当前 CARLA 主线会形成明确 merge conflict。
+3. **闭环控制**：当前 target / anchor 是空间 checkpoint，不是 fixed-time trajectory；因此推理侧默认空间 PID 不再按 waypoint index 时间间隔估计 desired speed。
 
 ### 建议
-- **立即明确决策**：在 CARLA 侧最终采用 `8x2` 还是 `8x3`，并写成配置项。当前不应长期停留在“半对齐”状态。
-- **单独明确新 anchor 策略**：是先离线重采样得到兼容版 `20x8x2`，还是系统性升级到 `99x10x2`。
+- **当前决策**：CARLA 侧主线采用 `99x10x2` / XY-only，不再保留 heading 轨迹 head。
+- **后续方向**：若需要更稳的闭环速度控制，优先新增 speed head 或单独训练控制相关输出，而不是把当前空间 checkpoint 重新解释成时间轨迹。
 
 ---
 
@@ -111,21 +109,20 @@
 ### 当前 CARLA Port
 - 当前 `DiffusionDriveAgent` 推理代码路径里，显式构造的是：
   - `command`：CARLA 6 维 one-hot
-  - `velocity`：2 维 `[[speed, 0.0]]`
-  - `acceleration`：2 维 `[[accel, 0.0]]`，其中 `accel = (speed - prev_speed) / carla_frame_rate`
+  - `speed`：1 维原始速度
 - 另外，在 `carla_garage/team_code/model.py` 的原 garage 模型中，还存在独立的 `extra_sensors` 机制：
   - 若 `use_velocity=True`，拼接 `velocity_normalization(ego_vel)`，贡献 `1` 维
   - 若 `use_discrete_command=True`，拼接 `command`，贡献 `6` 维
   - 然后把拼接结果送入 `extra_sensor_encoder`
 - 因此这里需要明确区分：
-  - `DiffusionDriveAgent` 当前使用的是显式 `status_feature`
+  - `DiffusionDriveAgent` 当前使用的是显式 `status_feature = command_one_hot(6)+speed(1)`
   - `extra_sensors` 是另一套可选输入分支，不应被表述成固定的“command 6+1 维”
 - **来源文件**：`carla_garage/team_code/diffusiondrive_agent.py:379-390`
 
 ### 差异影响
-- 形状一致，但 **CARLA 端的加速度是单帧数值差分**，原版 NAVSIM 的加速度来自开环数据集的原始记录（通常是车辆动力学模型或 IMU 直接输出）。这个差异在重新训练时是否重要，尚未评估。
+- 形状不再强行对齐 NAVSIM 原版 10 维状态；当前 CARLA 主线以重新训练为前提，采用 7 维 status。
 - 之前若把 `command` 和 `extra_sensors` 写成固定的 `6+1`，会误导后续训练设计，因为真实代码里 `extra_sensors` 是可选分支，维度取决于 `use_velocity` 和 `use_discrete_command` 的组合。
-- `dd_todo.md` 已明确将 `status_feature` 对齐列为"不作为近期 TODO"（因为计划重新训练）。这是合理决策，但应在训练准备阶段重新评估。
+- 训练和推理默认都使用当前 command；旧 `commands[-2]` 一拍延迟只作为推理侧 ablation。
 
 ---
 

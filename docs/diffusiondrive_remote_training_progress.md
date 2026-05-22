@@ -262,5 +262,4 @@ l1 > 2: 107
    - predicted trajectory
    - speed / command
 4. 再考虑扩大 `max-samples-per-scenario` 到 `512 / 1024` 做更长 balanced stage。
-5. 在进入 CARLA 闭环前，仍需复核 PID 对空间 checkpoint 的 waypoint / desired speed 假设。
-
+5. 进入 CARLA 闭环前，使用默认空间 PID 做 smoke，并 A/B `DIFFUSIONDRIVE_SPATIAL_PID=0` 的旧 time-index fallback；重点观察路口低速转弯、停车起步和 emergency stop 触发。

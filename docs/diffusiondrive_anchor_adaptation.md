@@ -95,8 +95,9 @@ pose 数更硬：
    - loss 仅监督 XY；若训练 target 暂时保留 heading，也只取前两维。
    - 默认 CARLA / B2D Full 训练 target 已切换为 `spatial_path`，按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样到 `10` 个 pose。
 5. 控制器
-   - `_control_pid()` 当前通过 `carla_fps // (wp_dilation * data_save_freq)` 取 1 秒索引。
-   - 若 10 pose 仍是 0.5s 间隔，则控制器可运行，但需要确认 desired speed 的点索引和 horizon 语义。
+   - `DiffusionDriveAgent` 默认启用空间 checkpoint PID，不再通过 `carla_fps // (wp_dilation * data_save_freq)` 把 waypoint index 解释成 0.5s / 1.0s 时间点。
+   - 当前空间 PID 用路径横向偏移 / endpoint turn ratio 在 slow / fast 目标速度之间插值，转向仍按满足 `aim_distance` 的空间 waypoint 选取 aim point。
+   - 旧的 time-index desired speed 逻辑仍可通过 `DIFFUSIONDRIVE_SPATIAL_PID=0` 作为 A/B fallback。
 6. Checkpoint 策略
    - 原 `20x8x2` checkpoint 不能无缝代表 `99x10x2` 分类语义。
    - 可以部分加载 backbone / transformer，trajectory head 和 anchor 相关参数应预期 mismatch 或重新训练。

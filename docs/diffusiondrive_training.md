@@ -267,6 +267,8 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - `spatial_path` 样本发现至少要求下一帧 annotation 存在；future path 不足覆盖 `11.5m` 时才沿路径末段或 command 方向外推。
 - `future_stride` 只用于 `--target-mode future_ego_time` legacy 路径；默认训练不再把 target 点解释为固定时间间隔。
 - `trajectory_sampling.interval_length` 目前仍保留为 DiffusionDrive config 兼容字段，不代表当前空间 checkpoint target 的真实时间间隔。
+- 推理侧 `DiffusionDriveAgent` 默认启用空间 checkpoint PID，不再从 waypoint index 的 0.5s / 1.0s 时间假设估计 desired speed；可用 `DIFFUSIONDRIVE_SPATIAL_PID=0` 临时回到旧逻辑做 A/B。
+- 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
 - 暂不支持 distributed / AMP / EMA。
 - 暂不训练 auxiliary heads。
 - `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。
