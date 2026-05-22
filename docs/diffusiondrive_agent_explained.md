@@ -39,6 +39,8 @@
   - `DIFFUSIONDRIVE_BACKBONE_PATH`
   - `DIFFUSIONDRIVE_COMMAND_DELAY`
   - `DIFFUSIONDRIVE_SPATIAL_PID`
+  - `DIFFUSIONDRIVE_DEBUG_CONTROL`
+  - `DIFFUSIONDRIVE_DEBUG_INTERVAL`
 - 实例化 `V2TransfuserModel`
 - 加载 checkpoint
 - 初始化 PID 控制器
@@ -166,6 +168,19 @@
 旧 time-index desired speed 逻辑仍可通过 `DIFFUSIONDRIVE_SPATIAL_PID=0` 启用。默认空间 PID 的速度估计只是一版保守闭环控制启发式，后续仍建议通过 CARLA / Bench2Drive 闭环评测调参，或改为显式 speed head。
 
 也就是说，这个 agent 当前不是“直接输出控制量”，而是“输出轨迹，再用经典控制器执行”。
+
+### 3.7 控制调试日志
+
+闭环 A/B 时可设置：
+
+```bash
+export DIFFUSIONDRIVE_DEBUG_CONTROL=1
+export DIFFUSIONDRIVE_DEBUG_INTERVAL=20
+```
+
+日志会按 step 间隔打印当前 / delayed / 实际使用 command、PID mode、desired speed、turn ratio、endpoint distance、aim waypoint、最终 control、stuck / force_move / stop sign 状态。默认关闭，避免长跑日志过噪。
+
+远端闭环运行时需要同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`。新版 agent 会读取 `GlobalConfig.diffusiondrive_spatial_pid*` 参数；如果只同步 agent 而没有同步 config，setup 阶段会报 `GlobalConfig` 缺少 `diffusiondrive_spatial_pid`。
 
 ## 4. 模型输入输出是怎么接起来的
 

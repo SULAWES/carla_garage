@@ -250,16 +250,16 @@ l1 > 2: 107
 
 优先级从高到低：
 
-1. 针对 `command=1 && speed<0.1 && abs(target_end_y)>4` 增加采样或 loss 权重。
-   - 例如新增 `--oversample-left-turn-stop` 或通用 hard-sample oversampling。
-   - 先做小实验，观察 `NonSignalizedJunctionLeftTurn` 是否继续下降，以及其它场景是否受损。
-2. 增加诊断统计：
-   - 训练集 discovery 后打印 / 落盘 command、speed bin、`abs(target_end_y)` bin 分布。
-   - 便于确认 hard cases 是否真的进入训练。
+1. 使用已新增的 hard-case loss weighting 做小实验：
+   - `--hard-left-turn-stop-loss-weight` 会对 `command=1 && speed<0.1 && abs(target_end_y)>4` 样本加权。
+   - 先从 Stage2 checkpoint 短训，观察 `NonSignalizedJunctionLeftTurn` 是否继续下降，以及其它场景是否受损。
+2. 使用已新增的 sample distribution JSON 确认 hard cases 是否进入训练：
+   - 脚本会落盘 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量。
+   - 用 `--dataset-stats-max-samples` 控制统计样本数；默认最多统计 `4096` 个样本。
 3. 可视化 top error 样本：
    - raw image
    - target trajectory
    - predicted trajectory
    - speed / command
 4. 再考虑扩大 `max-samples-per-scenario` 到 `512 / 1024` 做更长 balanced stage。
-5. 进入 CARLA 闭环前，使用默认空间 PID 做 smoke，并 A/B `DIFFUSIONDRIVE_SPATIAL_PID=0` 的旧 time-index fallback；重点观察路口低速转弯、停车起步和 emergency stop 触发。
+5. 进入 CARLA 闭环前，先确认远端已同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`，否则新版 agent 会因缺少 `GlobalConfig.diffusiondrive_spatial_pid*` 参数在 setup 阶段失败。然后使用默认空间 PID 做 smoke，并 A/B `DIFFUSIONDRIVE_SPATIAL_PID=0` 的旧 time-index fallback；同时可打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1`、`DIFFUSIONDRIVE_DEBUG_INTERVAL=20` 记录 command / desired speed / turn ratio / aim waypoint / control，重点观察路口低速转弯、停车起步和 emergency stop 触发。

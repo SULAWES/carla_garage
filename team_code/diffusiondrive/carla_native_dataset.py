@@ -42,6 +42,10 @@ class Bench2DriveDiffusionDataset(Dataset):
         spatial_target_max_future_frames: int = 120,
         balanced_scenarios: bool = False,
         max_samples_per_scenario: Optional[int] = None,
+        hard_left_turn_stop_loss_weight: float = 1.0,
+        hard_left_turn_command: int = 1,
+        hard_left_turn_speed_threshold: float = 0.1,
+        hard_left_turn_y_threshold: float = 4.0,
     ) -> None:
         self.config = config
         self.num_poses = num_poses
@@ -55,6 +59,10 @@ class Bench2DriveDiffusionDataset(Dataset):
         self.spatial_target_max_future_frames = spatial_target_max_future_frames
         self.balanced_scenarios = balanced_scenarios
         self.max_samples_per_scenario = max_samples_per_scenario
+        self.hard_left_turn_stop_loss_weight = hard_left_turn_stop_loss_weight
+        self.hard_left_turn_command = hard_left_turn_command
+        self.hard_left_turn_speed_threshold = hard_left_turn_speed_threshold
+        self.hard_left_turn_y_threshold = hard_left_turn_y_threshold
         self.samples, self.scenario_sample_counts = self._discover_samples(root_dirs, route_glob, max_samples)
         if not self.samples:
             roots = ", ".join(str(root) for root in root_dirs)
@@ -66,6 +74,24 @@ class Bench2DriveDiffusionDataset(Dataset):
     def __getitem__(self, index: int) -> dict:
         route_dir, frame = self.samples[index]
         annotation = load_annotation(route_dir, frame)
+        trajectory = build_trajectory_target(
+            route_dir,
+            frame,
+            self.num_poses,
+            self.future_stride,
+            target_mode=self.target_mode,
+            spatial_first_distance=self.spatial_target_first_distance,
+            spatial_interval=self.spatial_target_interval,
+            spatial_max_future_frames=self.spatial_target_max_future_frames,
+        )
+        hard_case = is_hard_left_turn_stop_sample(
+            annotation,
+            trajectory,
+            command=self.hard_left_turn_command,
+            speed_threshold=self.hard_left_turn_speed_threshold,
+            y_threshold=self.hard_left_turn_y_threshold,
+        )
+        sample_weight = self.hard_left_turn_stop_loss_weight if hard_case else 1.0
         return {
             "features": {
                 "camera_feature": build_camera_feature(
@@ -79,16 +105,9 @@ class Bench2DriveDiffusionDataset(Dataset):
                 "status_feature": build_status_feature(annotation),
             },
             "targets": {
-                "trajectory": build_trajectory_target(
-                    route_dir,
-                    frame,
-                    self.num_poses,
-                    self.future_stride,
-                    target_mode=self.target_mode,
-                    spatial_first_distance=self.spatial_target_first_distance,
-                    spatial_interval=self.spatial_target_interval,
-                    spatial_max_future_frames=self.spatial_target_max_future_frames,
-                ),
+                "trajectory": trajectory,
+                "trajectory_sample_weight": torch.tensor(sample_weight, dtype=torch.float32),
+                "hard_left_turn_stop": torch.tensor(float(hard_case), dtype=torch.float32),
             },
             "route": route_dir.name,
             "frame": frame,
@@ -320,6 +339,25 @@ def build_status_feature(annotation: dict) -> torch.Tensor:
     command = int(annotation.get("command_far", annotation.get("command_near", 4)))
     speed = float(annotation["speed"])
     return build_status_feature_from_command(command, speed)
+
+
+def is_hard_left_turn_stop_sample(
+    annotation: dict,
+    trajectory: torch.Tensor | np.ndarray,
+    *,
+    command: int = 1,
+    speed_threshold: float = 0.1,
+    y_threshold: float = 4.0,
+) -> bool:
+    """Return whether a sample matches the current low-speed left-turn failure mode."""
+
+    sample_command = int(annotation.get("command_far", annotation.get("command_near", 4)))
+    speed = float(annotation.get("speed", 0.0))
+    traj = torch.as_tensor(trajectory)
+    if traj.ndim < 2 or traj.shape[0] == 0 or traj.shape[-1] < 2:
+        return False
+    target_end_y = float(traj[-1, 1])
+    return sample_command == int(command) and speed < speed_threshold and abs(target_end_y) > y_threshold
 
 
 def build_trajectory_target(

@@ -65,6 +65,8 @@
   - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
   - [x] 训练入口支持 `--eval-only`，可从训练 checkpoint 只加载 `model` 跑验证集
   - [x] 训练入口支持 scenario-balanced 采样参数，并在日志中打印 scenario sample counts
+  - [x] 训练入口支持 low-speed left-turn hard-case loss weighting：`command=1 && speed<0.1 && abs(target_end_y)>4`
+  - [x] 训练入口会落盘 sample distribution JSON，统计 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
@@ -103,6 +105,7 @@
   - [x] 明确新聚类结果直接作为 `99x10x2` 正式 anchor，不再重采样 / 截断为兼容格式
 
 - [ ] **loss / optimization 定标**
+  - [x] 增加针对 `NonSignalizedJunctionLeftTurn` 已知高误差模式的可选样本级 loss weighting，默认关闭，validation / eval-only 保持未加权
   - [ ] 99 modes 下重新评估 focal alpha/gamma、`trajectory_cls_weight`、`trajectory_reg_weight`
   - [ ] 评估外层 `trajectory_weight` 接入后总梯度尺度，记录 grad norm 和 loss breakdown
   - [ ] 明确 image encoder 是否使用更小 LR / freeze BN / freeze backbone warmup

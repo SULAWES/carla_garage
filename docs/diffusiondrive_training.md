@@ -31,6 +31,8 @@
 - data split：`--val-root-dir`、`--val-route-glob`、`--val-frame-sampling`、`--val-max-samples`、`--val-every-steps`、`--max-val-steps`
 - dataset / target / time contract：`--dataset-mode`、`--target-mode`、`--spatial-target-first-distance`、`--spatial-target-interval`、`--spatial-target-max-future-frames`、`--assumed-frame-interval`、`--future-stride`、`--b2d-source-image-height`、`--b2d-source-image-width`
 - scenario balancing：`--balanced-scenarios`、`--max-samples-per-scenario`
+- hard-case weighting：`--hard-left-turn-stop-loss-weight`、`--hard-left-turn-command`、`--hard-left-turn-speed-threshold`、`--hard-left-turn-y-threshold`
+- sample distribution stats：`--dataset-stats-max-samples` 会落盘 `train_sample_distribution.json` / `validation_sample_distribution.json` / `eval_sample_distribution.json`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 - evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载
 
@@ -237,6 +239,21 @@ conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
 
 训练日志会打印 `Dataset scenario samples`，`training_config.json` 会记录 `balanced_scenarios` 和 `max_samples_per_scenario`。
 
+## Hard-Case Loss Weighting
+
+针对 Stage2 诊断中仍然偏高的 `NonSignalizedJunctionLeftTurn` 静止 / 低速左转样本，训练入口支持对一类 hard case 做 trajectory loss 样本加权：
+
+```bash
+--hard-left-turn-stop-loss-weight 3.0 \
+--hard-left-turn-command 1 \
+--hard-left-turn-speed-threshold 0.1 \
+--hard-left-turn-y-threshold 4.0
+```
+
+匹配条件是 `command == 1 && speed < 0.1 && abs(target_end_y) > 4.0`。权重只用于训练集；validation 和 eval-only 的 loss 保持未加权，便于和旧实验直接对比。训练日志会打印当前 batch 的 `hard_left_turn_stop` 数量和 `mean_sample_weight`，`training_config.json` 会记录 hard-case criteria。
+
+启动时脚本会额外抽样统计 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量，并写入输出目录的 sample distribution JSON。默认最多统计 `4096` 个样本；可用 `--dataset-stats-max-samples 0` 关闭，或调大以覆盖完整数据集。
+
 ## Eval Error Inspection
 
 `tools/inspect_diffusiondrive_eval_errors.py` 用于定位高误差样本。它输出的是模型推理轨迹和 target 之间的 per-sample 诊断误差，不是训练里的 batch-reduced focal + regression loss。
@@ -269,6 +286,8 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - `trajectory_sampling.interval_length` 目前仍保留为 DiffusionDrive config 兼容字段，不代表当前空间 checkpoint target 的真实时间间隔。
 - 推理侧 `DiffusionDriveAgent` 默认启用空间 checkpoint PID，不再从 waypoint index 的 0.5s / 1.0s 时间假设估计 desired speed；可用 `DIFFUSIONDRIVE_SPATIAL_PID=0` 临时回到旧逻辑做 A/B。
 - 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
+- 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、control、stuck / force_move / stop sign。
+- 远端闭环 A/B 前必须同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`；新版 agent 依赖 `GlobalConfig.diffusiondrive_spatial_pid*` 默认参数。
 - 暂不支持 distributed / AMP / EMA。
 - 暂不训练 auxiliary heads。
 - `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。

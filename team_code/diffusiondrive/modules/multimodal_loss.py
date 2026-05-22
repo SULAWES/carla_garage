@@ -153,20 +153,30 @@ class LossComputer(nn.Module):
                                             device=poses_cls.device)
         target_classes_onehot.scatter_(1, cls_target.unsqueeze(1), 1)
 
-        # Use py_sigmoid_focal_loss function for focal loss calculation
-        loss_cls = self.cls_loss_weight * py_sigmoid_focal_loss(
+        sample_weight = targets.get("trajectory_sample_weight")
+        if sample_weight is not None:
+            sample_weight = sample_weight.to(device=poses_reg.device, dtype=poses_reg.dtype).view(bs)
+            sample_weight = torch.clamp(sample_weight, min=0.0)
+            weight_denom = torch.clamp(sample_weight.sum(), min=1e-6)
+        else:
+            weight_denom = None
+
+        focal_loss = py_sigmoid_focal_loss(
             poses_cls,
             target_classes_onehot,
             weight=None,
             gamma=self.focal_gamma,
             alpha=self.focal_alpha,
-            reduction='mean',
+            reduction='none',
             avg_factor=None
         )
+        loss_cls_per_sample = focal_loss.mean(dim=1)
 
-        # Calculate regression loss
-        reg_loss = self.reg_loss_weight * F.l1_loss(best_reg, target_traj)
-        # import ipdb; ipdb.set_trace()
-        # Combine classification and regression losses
-        ret_loss = loss_cls + reg_loss
+        reg_loss_per_sample = F.l1_loss(best_reg, target_traj, reduction="none").mean(dim=(1, 2))
+        per_sample_loss = self.cls_loss_weight * loss_cls_per_sample + self.reg_loss_weight * reg_loss_per_sample
+
+        if sample_weight is None:
+            ret_loss = per_sample_loss.mean()
+        else:
+            ret_loss = (per_sample_loss * sample_weight).sum() / weight_denom
         return ret_loss

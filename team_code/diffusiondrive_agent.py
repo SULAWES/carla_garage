@@ -6,6 +6,8 @@ Env vars:
   - DIFFUSIONDRIVE_BACKBONE_PATH: optional timm backbone weights.
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
+  - DIFFUSIONDRIVE_DEBUG_CONTROL: print low-frequency control diagnostics (default: 0).
+  - DIFFUSIONDRIVE_DEBUG_INTERVAL: control diagnostic print interval in steps (default: 20).
 """
 
 import os
@@ -75,8 +77,11 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             "DIFFUSIONDRIVE_SPATIAL_PID",
             str(int(bool(self.config.diffusiondrive_spatial_pid))),
         ))
+        self.debug_control = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_CONTROL", "0"))
+        self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
         print("DiffusionDrive command delay:", self.use_command_delay)
         print("DiffusionDrive spatial PID:", self.use_spatial_pid)
+        print("DiffusionDrive control debug:", self.debug_control)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
@@ -379,6 +384,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             self.target_point_prev = target_point
             self.commands.append(far_command.value)
         command_value = self.commands[-2] if self.use_command_delay else far_command.value
+        self.last_command_debug = {
+            "current": int(far_command.value),
+            "delayed": int(self.commands[-2]),
+            "used": int(command_value),
+            "delay_enabled": bool(self.use_command_delay),
+        }
         one_hot_command = t_u.command_to_one_hot(command_value)
         result['command'] = torch.from_numpy(one_hot_command[np.newaxis]).to(self.device, dtype=torch.float32)
 
@@ -423,13 +434,16 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         waypoints = waypoints[0].detach().cpu().numpy()
         speed = float(speed)
 
+        endpoint_distance, turn_ratio = self._spatial_path_geometry(waypoints)
         if self.use_spatial_pid:
             desired_speed = self._spatial_path_desired_speed(waypoints)
+            pid_mode = "spatial"
         else:
             one_second = int(self.config.carla_fps // (self.config.wp_dilation * self.config.data_save_freq))
             one_second = min(max(one_second, 1), waypoints.shape[0])
             half_second = min(max(1, one_second // 2), waypoints.shape[0])
             desired_speed = np.linalg.norm(waypoints[half_second - 1] - waypoints[one_second - 1]) * 2.0
+            pid_mode = "time_index"
 
         if desired_speed < 1e-4:
             desired_speed = 0.0
@@ -461,19 +475,32 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         steer = self.turn_controller.step(angle)
         steer = np.clip(steer, -1.0, 1.0)
 
+        self.last_pid_debug = {
+            "mode": pid_mode,
+            "desired_speed": float(desired_speed),
+            "turn_ratio": float(turn_ratio),
+            "endpoint_distance": float(endpoint_distance),
+            "aim_index": int(aim_index),
+            "aim_x": float(aim[0]),
+            "aim_y": float(aim[1]),
+        }
         return steer, throttle, brake
 
-    def _spatial_path_desired_speed(self, waypoints):
-        """Estimate a cautious target speed from spatial checkpoints."""
+    def _spatial_path_geometry(self, waypoints):
         if waypoints.shape[0] == 0:
-            return 0.0
+            return 0.0, 0.0
 
         endpoint = waypoints[-1]
         endpoint_distance = float(np.linalg.norm(endpoint))
+        turn_ratio = abs(float(endpoint[1])) / max(endpoint_distance, 1e-4)
+        return endpoint_distance, turn_ratio
+
+    def _spatial_path_desired_speed(self, waypoints):
+        """Estimate a cautious target speed from spatial checkpoints."""
+        endpoint_distance, turn_ratio = self._spatial_path_geometry(waypoints)
         if endpoint_distance < self.config.brake_speed:
             return 0.0
 
-        turn_ratio = abs(float(endpoint[1])) / max(endpoint_distance, 1e-4)
         turn_threshold = self.config.diffusiondrive_spatial_pid_turn_threshold
         sharp_turn_threshold = self.config.diffusiondrive_spatial_pid_sharp_turn_threshold
         if sharp_turn_threshold <= turn_threshold:
@@ -670,7 +697,37 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         else:
             self.control = control
 
+        self._maybe_print_control_debug(speed, stop_for_stop_sign)
+
         return self.control
+
+    def _maybe_print_control_debug(self, speed, stop_for_stop_sign):
+        if not self.debug_control or (self.step % self.debug_control_interval) != 0:
+            return
+
+        command_debug = getattr(self, "last_command_debug", {})
+        pid_debug = getattr(self, "last_pid_debug", {})
+        print(
+            "[DiffusionDriveControl] "
+            f"step={self.step} "
+            f"speed={float(speed):.3f} "
+            f"cmd_used={command_debug.get('used')} "
+            f"cmd_current={command_debug.get('current')} "
+            f"cmd_delayed={command_debug.get('delayed')} "
+            f"cmd_delay={command_debug.get('delay_enabled')} "
+            f"pid_mode={pid_debug.get('mode')} "
+            f"desired_speed={pid_debug.get('desired_speed', float('nan')):.3f} "
+            f"turn_ratio={pid_debug.get('turn_ratio', float('nan')):.3f} "
+            f"endpoint_dist={pid_debug.get('endpoint_distance', float('nan')):.3f} "
+            f"aim_index={pid_debug.get('aim_index')} "
+            f"aim=({pid_debug.get('aim_x', float('nan')):.3f},{pid_debug.get('aim_y', float('nan')):.3f}) "
+            f"control=(steer={float(self.control.steer):.3f},"
+            f"throttle={float(self.control.throttle):.3f},"
+            f"brake={float(self.control.brake):.3f}) "
+            f"stuck={self.stuck_detector} "
+            f"force_move={self.force_move} "
+            f"stop_sign={bool(stop_for_stop_sign)}"
+        )
 
     def destroy(self, results=None):  # pylint: disable=unused-argument
         """

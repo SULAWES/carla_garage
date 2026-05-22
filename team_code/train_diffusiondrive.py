@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -15,7 +16,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from config import GlobalConfig
-from diffusiondrive.carla_native_dataset import Bench2DriveDiffusionDataset
+from diffusiondrive.carla_native_dataset import (
+    Bench2DriveDiffusionDataset,
+    build_trajectory_target,
+    is_hard_left_turn_stop_sample,
+    load_annotation,
+)
 from diffusiondrive.config_adapter import (
     DiffusionDriveRuntimeOverrides,
     build_diffusiondrive_config,
@@ -60,6 +66,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-max-samples", type=int, default=None)
     parser.add_argument("--balanced-scenarios", action="store_true")
     parser.add_argument("--max-samples-per-scenario", type=int, default=None)
+    parser.add_argument("--hard-left-turn-stop-loss-weight", type=float, default=1.0)
+    parser.add_argument("--hard-left-turn-command", type=int, default=1)
+    parser.add_argument("--hard-left-turn-speed-threshold", type=float, default=0.1)
+    parser.add_argument("--hard-left-turn-y-threshold", type=float, default=4.0)
+    parser.add_argument("--dataset-stats-max-samples", type=int, default=4096)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--max-val-steps", type=int, default=None)
     parser.add_argument("--eval-only", action="store_true")
@@ -185,6 +196,17 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "val_max_samples": args.val_max_samples,
             "balanced_scenarios": args.balanced_scenarios,
             "max_samples_per_scenario": args.max_samples_per_scenario,
+        },
+        "hard_case_weighting": {
+            "enabled": args.hard_left_turn_stop_loss_weight != 1.0,
+            "loss_weight": args.hard_left_turn_stop_loss_weight,
+            "applies_to": "training only; validation and eval-only losses remain unweighted",
+            "criteria": {
+                "command": args.hard_left_turn_command,
+                "speed_lt": args.hard_left_turn_speed_threshold,
+                "abs_target_end_y_gt": args.hard_left_turn_y_threshold,
+            },
+            "failure_mode": "low-speed command=1 samples whose spatial target ends with large lateral offset",
         },
         "target": {
             "mode": args.target_mode,
@@ -375,6 +397,111 @@ def format_scenario_sample_counts(counts: dict[str, int], limit: int = 12) -> st
     return shown
 
 
+def _speed_bin(speed: float) -> str:
+    if speed < 0.1:
+        return "<0.1"
+    if speed < 2.0:
+        return "0.1-2"
+    if speed < 5.0:
+        return "2-5"
+    return ">=5"
+
+
+def _abs_y_bin(abs_y: float) -> str:
+    if abs_y < 2.0:
+        return "<2"
+    if abs_y < 4.0:
+        return "2-4"
+    return ">=4"
+
+
+def summarize_sample_distribution(
+    dataset: Bench2DriveDiffusionDataset,
+    *,
+    name: str,
+    output_dir: Path,
+    max_samples: int,
+) -> dict[str, Any]:
+    total = len(dataset.samples)
+    if max_samples <= 0 or total == 0:
+        summary = {"total_samples": total, "sampled_samples": 0, "skipped": True}
+    else:
+        sampled = min(total, max_samples)
+        if sampled == total:
+            indices = list(range(total))
+        else:
+            indices = sorted({int(index) for index in np.linspace(0, total - 1, sampled)})
+
+        command_counts: Counter[str] = Counter()
+        speed_bins: Counter[str] = Counter()
+        abs_target_end_y_bins: Counter[str] = Counter()
+        hard_by_scenario: Counter[str] = Counter()
+        hard_count = 0
+        target_end_y_values: list[float] = []
+
+        for index in indices:
+            route_dir, frame = dataset.samples[index]
+            annotation = load_annotation(route_dir, frame)
+            trajectory = build_trajectory_target(
+                route_dir,
+                frame,
+                dataset.num_poses,
+                dataset.future_stride,
+                target_mode=dataset.target_mode,
+                spatial_first_distance=dataset.spatial_target_first_distance,
+                spatial_interval=dataset.spatial_target_interval,
+                spatial_max_future_frames=dataset.spatial_target_max_future_frames,
+            )
+            command = int(annotation.get("command_far", annotation.get("command_near", 4)))
+            speed = float(annotation.get("speed", 0.0))
+            abs_target_end_y = abs(float(trajectory[-1, 1]))
+
+            command_counts[str(command)] += 1
+            speed_bins[_speed_bin(speed)] += 1
+            abs_target_end_y_bins[_abs_y_bin(abs_target_end_y)] += 1
+            target_end_y_values.append(abs_target_end_y)
+
+            if is_hard_left_turn_stop_sample(
+                annotation,
+                trajectory,
+                command=dataset.hard_left_turn_command,
+                speed_threshold=dataset.hard_left_turn_speed_threshold,
+                y_threshold=dataset.hard_left_turn_y_threshold,
+            ):
+                hard_count += 1
+                hard_by_scenario[route_dir.parent.name] += 1
+
+        summary = {
+            "total_samples": total,
+            "sampled_samples": len(indices),
+            "hard_left_turn_stop_count": hard_count,
+            "hard_left_turn_stop_fraction": hard_count / max(len(indices), 1),
+            "hard_left_turn_stop_criteria": {
+                "command": dataset.hard_left_turn_command,
+                "speed_lt": dataset.hard_left_turn_speed_threshold,
+                "abs_target_end_y_gt": dataset.hard_left_turn_y_threshold,
+            },
+            "command_counts": dict(sorted(command_counts.items())),
+            "speed_bins_mps": dict(sorted(speed_bins.items())),
+            "abs_target_end_y_bins_m": dict(sorted(abs_target_end_y_bins.items())),
+            "hard_left_turn_stop_by_scenario": dict(sorted(hard_by_scenario.items())),
+            "abs_target_end_y_mean": float(np.mean(target_end_y_values)) if target_end_y_values else 0.0,
+            "abs_target_end_y_p95": float(np.percentile(target_end_y_values, 95)) if target_end_y_values else 0.0,
+        }
+
+    path = output_dir / f"{name}_sample_distribution.json"
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(make_json_safe(summary), file, indent=2, sort_keys=True)
+    print(
+        f"{name} distribution: sampled={summary['sampled_samples']}/{summary['total_samples']} "
+        f"hard_left_turn_stop={summary.get('hard_left_turn_stop_count', 0)} "
+        f"fraction={summary.get('hard_left_turn_stop_fraction', 0.0):.4f} "
+        f"file={path}",
+        flush=True,
+    )
+    return summary
+
+
 def build_dataset(
     root_dirs: list[Path],
     args: argparse.Namespace,
@@ -383,6 +510,7 @@ def build_dataset(
     frame_sampling: int,
     max_samples: Optional[int],
     route_glob: str,
+    enable_hard_case_weight: bool,
 ) -> Bench2DriveDiffusionDataset:
     return Bench2DriveDiffusionDataset(
         root_dirs,
@@ -400,6 +528,12 @@ def build_dataset(
         spatial_target_max_future_frames=args.spatial_target_max_future_frames,
         balanced_scenarios=args.balanced_scenarios,
         max_samples_per_scenario=args.max_samples_per_scenario,
+        hard_left_turn_stop_loss_weight=(
+            args.hard_left_turn_stop_loss_weight if enable_hard_case_weight else 1.0
+        ),
+        hard_left_turn_command=args.hard_left_turn_command,
+        hard_left_turn_speed_threshold=args.hard_left_turn_speed_threshold,
+        hard_left_turn_y_threshold=args.hard_left_turn_y_threshold,
     )
 
 
@@ -567,10 +701,17 @@ def main() -> None:
             frame_sampling=eval_frame_sampling,
             max_samples=eval_max_samples,
             route_glob=eval_route_glob,
+            enable_hard_case_weight=False,
         )
         eval_dataloader = build_dataloader(eval_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Eval samples: {len(eval_dataset)}", flush=True)
         print(f"Eval scenario samples: {format_scenario_sample_counts(eval_dataset.scenario_sample_counts)}", flush=True)
+        summarize_sample_distribution(
+            eval_dataset,
+            name="eval",
+            output_dir=output_dir,
+            max_samples=args.dataset_stats_max_samples,
+        )
         print(f"Output dir: {output_dir}", flush=True)
 
         model = V2TransfuserModel(dd_config).to(device)
@@ -587,6 +728,7 @@ def main() -> None:
         frame_sampling=args.frame_sampling,
         max_samples=args.max_samples,
         route_glob=args.route_glob,
+        enable_hard_case_weight=True,
     )
     dataloader = build_dataloader(dataset, args, device, shuffle=True, drop_last=args.drop_last)
     val_dataloader = None
@@ -599,12 +741,25 @@ def main() -> None:
             frame_sampling=args.val_frame_sampling or args.frame_sampling,
             max_samples=args.val_max_samples,
             route_glob=args.val_route_glob or args.route_glob,
+            enable_hard_case_weight=False,
         )
         val_dataloader = build_dataloader(val_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Validation samples: {len(val_dataset)}", flush=True)
         print(f"Validation scenario samples: {format_scenario_sample_counts(val_dataset.scenario_sample_counts)}", flush=True)
+        summarize_sample_distribution(
+            val_dataset,
+            name="validation",
+            output_dir=output_dir,
+            max_samples=args.dataset_stats_max_samples,
+        )
     print(f"Dataset samples: {len(dataset)}", flush=True)
     print(f"Dataset scenario samples: {format_scenario_sample_counts(dataset.scenario_sample_counts)}", flush=True)
+    summarize_sample_distribution(
+        dataset,
+        name="train",
+        output_dir=output_dir,
+        max_samples=args.dataset_stats_max_samples,
+    )
     print(f"Output dir: {output_dir}", flush=True)
 
     model = V2TransfuserModel(dd_config).to(device)
@@ -644,11 +799,14 @@ def main() -> None:
                 loss_parts = ", ".join(
                     f"{name}={float(value.detach().cpu()):.4f}" for name, value in sorted(loss_dict.items())
                 )
+                hard_count = int(targets["hard_left_turn_stop"].detach().sum().cpu())
+                mean_sample_weight = float(targets["trajectory_sample_weight"].detach().mean().cpu())
                 lr = optimizer.param_groups[0]["lr"]
                 print(
                     f"epoch={epoch} step={global_step} lr={lr:.6g} loss={float(loss.detach().cpu()):.4f} "
                     f"avg={avg_loss:.4f} trajectory_unweighted={float(outputs['trajectory_loss'].detach().cpu()):.4f} "
-                    f"{loss_parts}",
+                    f"hard_left_turn_stop={hard_count}/{targets['hard_left_turn_stop'].numel()} "
+                    f"mean_sample_weight={mean_sample_weight:.3f} {loss_parts}",
                     flush=True,
                 )
 

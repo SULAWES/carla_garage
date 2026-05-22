@@ -1,0 +1,58 @@
+ssh u19666033@logini.tongji.edu.cn -p 10022
+
+srun -p L40 -J syb_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=6 --pty /bin/bash
+srun -p A800 -J syb_debug -N 1 -n 1 --gres=gpu:a800:1 --cpus-per-task=6 --pty /bin/bash
+
+srun -p L40 -J ltr_debug -w gpu4013 -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=6 --pty /bin/bash
+
+srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=6 --pty /bin/bash
+
+srun -p amd -J ltr_cpu -N 1 -n 1 --cpus-per-task=6 --pty /bin/bash
+
+srun -p L40 \
+     -J syb_train_4 \
+     -N 1 \
+     -n 1 \
+     --gres=gpu:l40:4 \
+     --cpus-per-task=24 \
+     --mem=64G \
+     --pty /bin/bash
+     
+torchrun --nproc_per_node=4 --master_port=29501 multi_gpu_drive_pl_train.py
+
+sbatch request_gpu_source.sh
+
+srun --job-name=syb_tfpp --partition=L40 --nodes=1 --ntasks=1 --cpus-per-task=28 --gres=gpu:l40:4 --mail-type=end --mail-user=2431997@tongji.edu.cn --output=%j.out --error=%j.err sh -c 'scontrol show job $SLURM_JOB_ID; pwd'
+
+srun -p L40 -J syb_train_moeFreezeBb -N 1 -n 1 -w gpu4009 --gres=gpu:l40:4 --cpus-per-task=28 --mem=64G --mail-type=end --mail-user=2431997@tongji.edu.cn --pty /bin/bash 
+
+srun -p L40 -J syb_train_noMoe -N 1 -n 1 --gres=gpu:l40:4 --cpus-per-task=28 --mem=64G --mail-type=end --mail-user=2431997@tongji.edu.cn --pty /bin/bash 
+     
+srun -p A800 -J syb_cl_eval_0 -N 1 -n 1 -w gpu8008 --gres=gpu:a800:1 --cpus-per-task=6 --mem=128G --mail-type=end --mail-user=2431997@tongji.edu.cn --pty /bin/bash 
+
+srun -p A800 \
+     -J syb_cl_eval_0 \
+     -N 1 \
+     -n 1 \
+     --gres=gpu:a800:1 \
+     --cpus-per-task=6 \
+     --mem=128G \
+     --mail-type=end \
+     --mail-user=2431997@tongji.edu.cn \
+     --pty /bin/bash 
+     
+srun -p L40 \
+     -J syb_cl_eval_2 \
+     -N 1 \
+     -n 1 \
+     --gres=gpu:l40:1 \
+     --cpus-per-task=6 \
+     --mem=128G \
+     --mail-type=end \
+     --mail-user=2431997@tongji.edu.cn \
+     --pty /bin/bash 
+     
+ps aux | grep syb
+
+find /path/to/your/folder -name "*.sh" -type f -exec chmod +x {} \;
+
