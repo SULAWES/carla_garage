@@ -7,6 +7,8 @@ srun -p L40 -J ltr_debug -w gpu4013 -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=6
 
 srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=6 --pty /bin/bash
 
+srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --pty /bin/bash
+
 srun -p amd -J ltr_cpu -N 1 -n 1 --cpus-per-task=6 --pty /bin/bash
 
 srun -p L40 \

@@ -260,3 +260,89 @@ python tools/inspect_diffusiondrive_eval_errors.py \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --output-csv ~/ltr/dd_logs/full_eval_stage2/nsj_left_errors.csv
 
+stage3 
+
+python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --logdir ~/ltr/dd_logs/full_stage3 \
+    --id hard_left_weight3_bs16_256ps \
+    --epochs 5 \
+    --batch-size 16 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --max-samples-per-scenario 256 \
+    --num-workers 6 \
+    --scheduler cosine \
+    --warmup-steps 200 \
+    --min-lr 1e-6 \
+    --save-every-steps 1000 \
+    --log-every 50 \
+    --lr 1e-4 \
+    --weight-decay 1e-4 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --resume-file ~/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth \
+    --hard-left-turn-stop-loss-weight 3.0 \
+    --dataset-stats-max-samples 4096
+
+python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --logdir ~/ltr/dd_logs/full_stage3 \
+    --id hard_left_weight3_bs16_256ps \
+    --epochs 5 \
+    --batch-size 16 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --max-samples-per-scenario 256 \
+    --num-workers 6 \
+    --scheduler cosine \
+    --warmup-steps 200 \
+    --min-lr 1e-6 \
+    --save-every-steps 1000 \
+    --log-every 50 \
+    --lr 1e-4 \
+    --weight-decay 1e-4 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file ~/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth \
+    --hard-left-turn-stop-loss-weight 5.0 \
+    --dataset-stats-max-samples 4096
+
+
+stage3 long for night
+
+python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --val-root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir /share/home/u19666033/ltr/dd_logs/full_stage3 \
+    --id hard_left_weight5_bs32_512ps \
+    --epochs 10 \
+    --batch-size 64 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --max-samples-per-scenario 512 \
+    --num-workers 7 \
+    --scheduler cosine \
+    --warmup-steps 500 \
+    --min-lr 1e-6 \
+    --val-every-steps 1000 \
+    --val-frame-sampling 5 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps 1000 \
+    --log-every 50 \
+    --lr 5e-5 \
+    --weight-decay 1e-4 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file /share/home/u19666033/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth \
+    --hard-left-turn-stop-loss-weight 5.0 \
+    --dataset-stats-max-samples 20000 \
+    2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps_train.log
