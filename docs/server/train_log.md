@@ -62,62 +62,62 @@ while true; do
   sleep 10
 done > ~/ltr/dd_logs/gpu_logs/l40_monitor.log 2>&1 &
 
-  记下它打印的后台 job id 不重要，之后直接跑训练：
+记下它打印的后台 job id 不重要，之后直接跑训练：
 
-  python team_code/train_diffusiondrive.py \
-    --root-dir /share/home/u19666033/djy/carla_dataset \
-    --route-glob "*/*" \
-    --logdir ~/ltr/dd_logs/full_stage0 \
-    --id spatial_path_bs4_lr1e-4 \
-    --epochs 3 \
-    --batch-size 4 \
-    --frame-sampling 5 \
-    --max-samples 4096 \
-    --max-steps 1000 \
-    --num-workers 6 \
-    --scheduler cosine \
-    --warmup-steps 100 \
-    --save-every-steps 500 \
-    --log-every 20 \
-    --lr 1e-4 \
-    --weight-decay 1e-4 \
-    --device cuda:0 \
-    --load-file ""
+python team_code/train_diffusiondrive.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset \
+  --route-glob "*/*" \
+  --logdir ~/ltr/dd_logs/full_stage0 \
+  --id spatial_path_bs4_lr1e-4 \
+  --epochs 3 \
+  --batch-size 4 \
+  --frame-sampling 5 \
+  --max-samples 4096 \
+  --max-steps 1000 \
+  --num-workers 6 \
+  --scheduler cosine \
+  --warmup-steps 100 \
+  --save-every-steps 500 \
+  --log-every 20 \
+  --lr 1e-4 \
+  --weight-decay 1e-4 \
+  --device cuda:0 \
+  --load-file ""
 
-  训练结束后看 GPU 日志：
+训练结束后看 GPU 日志：
 
-  tail -n 80 ~/ltr/dd_logs/gpu_logs/l40_monitor.log
+tail -n 80 ~/ltr/dd_logs/gpu_logs/l40_monitor.log
 
-  停止后台监控：
+停止后台监控：
 
-  pkill -f "nvidia-smi"
+pkill -f "nvidia-smi"
 
-  方法 2：只记录显存和利用率，更干净
+方法 2：只记录显存和利用率，更干净
 
-  mkdir -p ~/ltr/dd_logs/gpu_logs
+mkdir -p ~/ltr/dd_logs/gpu_logs
 
-  while true; do
-    date '+%F %T'
-    nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,utilization.memory,power.draw \
-      --format=csv,noheader,nounits
-    sleep 10
-  done > ~/ltr/dd_logs/gpu_logs/l40_compact.csv 2>&1 &
+while true; do
+  date '+%F %T'
+  nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,utilization.memory,power.draw \
+    --format=csv,noheader,nounits
+  sleep 10
+done > ~/ltr/dd_logs/gpu_logs/l40_compact.csv 2>&1 &
 
-  训练完看：
+训练完看：
 
-  tail -n 40 ~/ltr/dd_logs/gpu_logs/l40_compact.csv
+tail -n 40 ~/ltr/dd_logs/gpu_logs/l40_compact.csv
 
-  停止：
+停止：
 
-  pkill -f "nvidia-smi --query-gpu"
+pkill -f "nvidia-smi --query-gpu"
 
-  如果你想训练日志也保存下来
+如果你想训练日志也保存下来
 
-  python team_code/train_diffusiondrive.py ... 2>&1 | tee ~/ltr/dd_logs/full_stage0/spatial_path_bs4_lr1e-4/train.log
+python team_code/train_diffusiondrive.py ... 2>&1 | tee ~/ltr/dd_logs/full_stage0/spatial_path_bs4_lr1e-4/train.log
 
-  但注意 tee 的目录要先存在：
+但注意 tee 的目录要先存在：
 
-  mkdir -p ~/ltr/dd_logs/full_stage0/spatial_path_bs4_lr1e-4
+mkdir -p ~/ltr/dd_logs/full_stage0/spatial_path_bs4_lr1e-4
 
 
 Samples: 1024                                                                                                           
