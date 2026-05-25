@@ -67,6 +67,8 @@
   - [x] 训练入口支持 scenario-balanced 采样参数，并在日志中打印 scenario sample counts
   - [x] 训练入口支持 low-speed left-turn hard-case loss weighting：`command=1 && speed<0.1 && abs(target_end_y)>4`
   - [x] 训练入口会落盘 sample distribution JSON，统计 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量
+  - [x] 训练入口支持 sample manifest JSONL，缓存 route/frame、command、speed 和 trajectory target，减少每个 epoch 反复解未来 annotation
+  - [x] DataLoader worker 会限制 OpenCV / torch 内部线程，并支持 `--prefetch-factor` 与可选 `--persistent-workers`
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset

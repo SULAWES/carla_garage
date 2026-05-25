@@ -46,6 +46,8 @@ class Bench2DriveDiffusionDataset(Dataset):
         hard_left_turn_command: int = 1,
         hard_left_turn_speed_threshold: float = 0.1,
         hard_left_turn_y_threshold: float = 4.0,
+        sample_manifest_path: Optional[str | Path] = None,
+        rebuild_sample_manifest: bool = False,
     ) -> None:
         self.config = config
         self.num_poses = num_poses
@@ -63,7 +65,18 @@ class Bench2DriveDiffusionDataset(Dataset):
         self.hard_left_turn_command = hard_left_turn_command
         self.hard_left_turn_speed_threshold = hard_left_turn_speed_threshold
         self.hard_left_turn_y_threshold = hard_left_turn_y_threshold
-        self.samples, self.scenario_sample_counts = self._discover_samples(root_dirs, route_glob, max_samples)
+        self.sample_metadata: Optional[List[dict]] = None
+        self.sample_manifest_path = Path(sample_manifest_path) if sample_manifest_path else None
+
+        if self.sample_manifest_path and self.sample_manifest_path.is_file() and not rebuild_sample_manifest:
+            self.samples, self.sample_metadata, self.scenario_sample_counts = self._load_sample_manifest(
+                self.sample_manifest_path
+            )
+        else:
+            self.samples, self.scenario_sample_counts = self._discover_samples(root_dirs, route_glob, max_samples)
+            if self.sample_manifest_path:
+                self.sample_metadata = self._write_sample_manifest(self.sample_manifest_path)
+
         if not self.samples:
             roots = ", ".join(str(root) for root in root_dirs)
             raise RuntimeError(f"No trainable Bench2Drive samples found under: {roots}")
@@ -72,20 +85,11 @@ class Bench2DriveDiffusionDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, index: int) -> dict:
-        route_dir, frame = self.samples[index]
-        annotation = load_annotation(route_dir, frame)
-        trajectory = build_trajectory_target(
-            route_dir,
-            frame,
-            self.num_poses,
-            self.future_stride,
-            target_mode=self.target_mode,
-            spatial_first_distance=self.spatial_target_first_distance,
-            spatial_interval=self.spatial_target_interval,
-            spatial_max_future_frames=self.spatial_target_max_future_frames,
-        )
-        hard_case = is_hard_left_turn_stop_sample(
-            annotation,
+        cv2.setNumThreads(0)
+        route_dir, frame, command, speed, trajectory = self._sample_components(index)
+        hard_case = is_hard_left_turn_stop_sample_from_values(
+            command,
+            speed,
             trajectory,
             command=self.hard_left_turn_command,
             speed_threshold=self.hard_left_turn_speed_threshold,
@@ -102,7 +106,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                     jpeg_artifact=self.jpeg_artifact,
                 ),
                 "lidar_feature": build_lidar_feature(route_dir, frame, self.config),
-                "status_feature": build_status_feature(annotation),
+                "status_feature": build_status_feature_from_command(command, speed),
             },
             "targets": {
                 "trajectory": trajectory,
@@ -112,6 +116,123 @@ class Bench2DriveDiffusionDataset(Dataset):
             "route": route_dir.name,
             "frame": frame,
         }
+
+    def get_sample_summary(self, index: int) -> dict:
+        route_dir, frame, command, speed, trajectory = self._sample_components(index)
+        hard_case = is_hard_left_turn_stop_sample_from_values(
+            command,
+            speed,
+            trajectory,
+            command=self.hard_left_turn_command,
+            speed_threshold=self.hard_left_turn_speed_threshold,
+            y_threshold=self.hard_left_turn_y_threshold,
+        )
+        return {
+            "route_dir": route_dir,
+            "frame": frame,
+            "command": command,
+            "speed": speed,
+            "trajectory": trajectory,
+            "hard_left_turn_stop": hard_case,
+        }
+
+    def _sample_components(self, index: int) -> tuple[Path, int, int, float, torch.Tensor]:
+        route_dir, frame = self.samples[index]
+        if self.sample_metadata is not None:
+            metadata = self.sample_metadata[index]
+            command = int(metadata["command"])
+            speed = float(metadata["speed"])
+            trajectory = torch.tensor(metadata["trajectory"], dtype=torch.float32)
+            return route_dir, frame, command, speed, trajectory
+
+        annotation = load_annotation(route_dir, frame)
+        trajectory = build_trajectory_target(
+            route_dir,
+            frame,
+            self.num_poses,
+            self.future_stride,
+            target_mode=self.target_mode,
+            spatial_first_distance=self.spatial_target_first_distance,
+            spatial_interval=self.spatial_target_interval,
+            spatial_max_future_frames=self.spatial_target_max_future_frames,
+        )
+        command = int(annotation.get("command_far", annotation.get("command_near", 4)))
+        speed = float(annotation["speed"])
+        return route_dir, frame, command, speed, trajectory
+
+    def _load_sample_manifest(self, manifest_path: Path) -> tuple[List[tuple[Path, int]], List[dict], dict[str, int]]:
+        samples: List[tuple[Path, int]] = []
+        metadata: List[dict] = []
+        scenario_counts: dict[str, int] = {}
+
+        with manifest_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if record.get("type") == "metadata":
+                    continue
+                route_dir = Path(record["route_dir"])
+                frame = int(record["frame"])
+                samples.append((route_dir, frame))
+                metadata.append({
+                    "command": int(record["command"]),
+                    "speed": float(record["speed"]),
+                    "trajectory": record["trajectory"],
+                })
+                scenario = route_dir.parent.name
+                scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
+
+        print(f"Loaded sample manifest: {manifest_path} ({len(samples)} samples)", flush=True)
+        return samples, metadata, scenario_counts
+
+    def _write_sample_manifest(self, manifest_path: Path) -> List[dict]:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_records: List[dict] = []
+        header = {
+            "type": "metadata",
+            "format": "diffusiondrive_sample_manifest_v1",
+            "target_mode": self.target_mode,
+            "num_poses": self.num_poses,
+            "future_stride": self.future_stride,
+            "spatial_target_first_distance": self.spatial_target_first_distance,
+            "spatial_target_interval": self.spatial_target_interval,
+            "spatial_target_max_future_frames": self.spatial_target_max_future_frames,
+            "sample_count": len(self.samples),
+        }
+
+        with manifest_path.open("w", encoding="utf-8") as file:
+            file.write(json.dumps(header, sort_keys=True) + "\n")
+            for route_dir, frame in self.samples:
+                annotation = load_annotation(route_dir, frame)
+                trajectory = build_trajectory_target(
+                    route_dir,
+                    frame,
+                    self.num_poses,
+                    self.future_stride,
+                    target_mode=self.target_mode,
+                    spatial_first_distance=self.spatial_target_first_distance,
+                    spatial_interval=self.spatial_target_interval,
+                    spatial_max_future_frames=self.spatial_target_max_future_frames,
+                )
+                record = {
+                    "route_dir": str(route_dir.resolve()),
+                    "scenario": route_dir.parent.name,
+                    "route": route_dir.name,
+                    "frame": int(frame),
+                    "command": int(annotation.get("command_far", annotation.get("command_near", 4))),
+                    "speed": float(annotation["speed"]),
+                    "trajectory": trajectory.tolist(),
+                }
+                file.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
+                metadata_records.append({
+                    "command": record["command"],
+                    "speed": record["speed"],
+                    "trajectory": record["trajectory"],
+                })
+
+        print(f"Wrote sample manifest: {manifest_path} ({len(metadata_records)} samples)", flush=True)
+        return metadata_records
 
     def _discover_samples(
         self,
@@ -353,6 +474,27 @@ def is_hard_left_turn_stop_sample(
 
     sample_command = int(annotation.get("command_far", annotation.get("command_near", 4)))
     speed = float(annotation.get("speed", 0.0))
+    return is_hard_left_turn_stop_sample_from_values(
+        sample_command,
+        speed,
+        trajectory,
+        command=command,
+        speed_threshold=speed_threshold,
+        y_threshold=y_threshold,
+    )
+
+
+def is_hard_left_turn_stop_sample_from_values(
+    sample_command: int,
+    speed: float,
+    trajectory: torch.Tensor | np.ndarray,
+    *,
+    command: int = 1,
+    speed_threshold: float = 0.1,
+    y_threshold: float = 4.0,
+) -> bool:
+    """Return whether scalar sample metadata matches the known left-turn failure mode."""
+
     traj = torch.as_tensor(trajectory)
     if traj.ndim < 2 or traj.shape[0] == 0 or traj.shape[-1] < 2:
         return False

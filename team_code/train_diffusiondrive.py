@@ -18,9 +18,6 @@ from torch.utils.data import DataLoader
 from config import GlobalConfig
 from diffusiondrive.carla_native_dataset import (
     Bench2DriveDiffusionDataset,
-    build_trajectory_target,
-    is_hard_left_turn_stop_sample,
-    load_annotation,
 )
 from diffusiondrive.config_adapter import (
     DiffusionDriveRuntimeOverrides,
@@ -51,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr-gamma", type=float, default=0.1)
     parser.add_argument("--min-lr", type=float, default=0.0)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--prefetch-factor", type=int, default=2)
+    parser.add_argument("--persistent-workers", action="store_true")
     parser.add_argument("--frame-sampling", type=int, default=5)
     parser.add_argument("--val-frame-sampling", type=int, default=None)
     parser.add_argument("--future-stride", type=int, default=10)
@@ -71,6 +70,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hard-left-turn-speed-threshold", type=float, default=0.1)
     parser.add_argument("--hard-left-turn-y-threshold", type=float, default=4.0)
     parser.add_argument("--dataset-stats-max-samples", type=int, default=4096)
+    parser.add_argument("--sample-manifest", type=Path, default=None)
+    parser.add_argument("--val-sample-manifest", type=Path, default=None)
+    parser.add_argument("--rebuild-sample-manifest", action="store_true")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--max-val-steps", type=int, default=None)
     parser.add_argument("--eval-only", action="store_true")
@@ -122,6 +124,18 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def seed_worker(worker_id: int) -> None:
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed + worker_id)
+    random.seed(worker_seed + worker_id)
+    torch.set_num_threads(1)
+    try:
+        import cv2  # pylint: disable=import-outside-toplevel
+        cv2.setNumThreads(0)
+    except ImportError:
+        pass
 
 
 def move_features_to_device(batch: dict, device: torch.device) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
@@ -196,6 +210,11 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "val_max_samples": args.val_max_samples,
             "balanced_scenarios": args.balanced_scenarios,
             "max_samples_per_scenario": args.max_samples_per_scenario,
+            "sample_manifest": make_json_safe(args.sample_manifest),
+            "val_sample_manifest": make_json_safe(args.val_sample_manifest),
+            "rebuild_sample_manifest": args.rebuild_sample_manifest,
+            "prefetch_factor": args.prefetch_factor,
+            "persistent_workers": args.num_workers > 0 and args.persistent_workers,
         },
         "hard_case_weighting": {
             "enabled": args.hard_left_turn_stop_loss_weight != 1.0,
@@ -440,20 +459,11 @@ def summarize_sample_distribution(
         target_end_y_values: list[float] = []
 
         for index in indices:
-            route_dir, frame = dataset.samples[index]
-            annotation = load_annotation(route_dir, frame)
-            trajectory = build_trajectory_target(
-                route_dir,
-                frame,
-                dataset.num_poses,
-                dataset.future_stride,
-                target_mode=dataset.target_mode,
-                spatial_first_distance=dataset.spatial_target_first_distance,
-                spatial_interval=dataset.spatial_target_interval,
-                spatial_max_future_frames=dataset.spatial_target_max_future_frames,
-            )
-            command = int(annotation.get("command_far", annotation.get("command_near", 4)))
-            speed = float(annotation.get("speed", 0.0))
+            sample = dataset.get_sample_summary(index)
+            route_dir = sample["route_dir"]
+            trajectory = sample["trajectory"]
+            command = int(sample["command"])
+            speed = float(sample["speed"])
             abs_target_end_y = abs(float(trajectory[-1, 1]))
 
             command_counts[str(command)] += 1
@@ -461,13 +471,7 @@ def summarize_sample_distribution(
             abs_target_end_y_bins[_abs_y_bin(abs_target_end_y)] += 1
             target_end_y_values.append(abs_target_end_y)
 
-            if is_hard_left_turn_stop_sample(
-                annotation,
-                trajectory,
-                command=dataset.hard_left_turn_command,
-                speed_threshold=dataset.hard_left_turn_speed_threshold,
-                y_threshold=dataset.hard_left_turn_y_threshold,
-            ):
+            if sample["hard_left_turn_stop"]:
                 hard_count += 1
                 hard_by_scenario[route_dir.parent.name] += 1
 
@@ -511,6 +515,7 @@ def build_dataset(
     max_samples: Optional[int],
     route_glob: str,
     enable_hard_case_weight: bool,
+    sample_manifest_path: Optional[Path],
 ) -> Bench2DriveDiffusionDataset:
     return Bench2DriveDiffusionDataset(
         root_dirs,
@@ -534,6 +539,8 @@ def build_dataset(
         hard_left_turn_command=args.hard_left_turn_command,
         hard_left_turn_speed_threshold=args.hard_left_turn_speed_threshold,
         hard_left_turn_y_threshold=args.hard_left_turn_y_threshold,
+        sample_manifest_path=sample_manifest_path,
+        rebuild_sample_manifest=args.rebuild_sample_manifest,
     )
 
 
@@ -544,14 +551,18 @@ def build_dataloader(
     shuffle: bool,
     drop_last: bool,
 ) -> DataLoader:
-    return DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        num_workers=args.num_workers,
-        pin_memory=device.type == "cuda",
-        drop_last=drop_last,
-    )
+    loader_kwargs = {
+        "batch_size": args.batch_size,
+        "shuffle": shuffle,
+        "num_workers": args.num_workers,
+        "pin_memory": device.type == "cuda",
+        "drop_last": drop_last,
+        "worker_init_fn": seed_worker if args.num_workers > 0 else None,
+        "persistent_workers": args.num_workers > 0 and args.persistent_workers,
+    }
+    if args.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = max(1, args.prefetch_factor)
+    return DataLoader(dataset, **loader_kwargs)
 
 
 @torch.no_grad()
@@ -693,6 +704,7 @@ def main() -> None:
         eval_frame_sampling = args.val_frame_sampling or args.frame_sampling
         eval_max_samples = args.val_max_samples if args.val_root_dir else args.max_samples
         eval_route_glob = args.val_route_glob or args.route_glob
+        eval_manifest = args.val_sample_manifest if args.val_root_dir else args.sample_manifest
         eval_dataset = build_dataset(
             eval_root_dirs,
             args,
@@ -702,6 +714,7 @@ def main() -> None:
             max_samples=eval_max_samples,
             route_glob=eval_route_glob,
             enable_hard_case_weight=False,
+            sample_manifest_path=eval_manifest,
         )
         eval_dataloader = build_dataloader(eval_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Eval samples: {len(eval_dataset)}", flush=True)
@@ -729,6 +742,7 @@ def main() -> None:
         max_samples=args.max_samples,
         route_glob=args.route_glob,
         enable_hard_case_weight=True,
+        sample_manifest_path=args.sample_manifest,
     )
     dataloader = build_dataloader(dataset, args, device, shuffle=True, drop_last=args.drop_last)
     val_dataloader = None
@@ -742,6 +756,7 @@ def main() -> None:
             max_samples=args.val_max_samples,
             route_glob=args.val_route_glob or args.route_glob,
             enable_hard_case_weight=False,
+            sample_manifest_path=args.val_sample_manifest,
         )
         val_dataloader = build_dataloader(val_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Validation samples: {len(val_dataset)}", flush=True)

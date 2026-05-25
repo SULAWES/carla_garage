@@ -33,6 +33,7 @@
 - scenario balancing：`--balanced-scenarios`、`--max-samples-per-scenario`
 - hard-case weighting：`--hard-left-turn-stop-loss-weight`、`--hard-left-turn-command`、`--hard-left-turn-speed-threshold`、`--hard-left-turn-y-threshold`
 - sample distribution stats：`--dataset-stats-max-samples` 会落盘 `train_sample_distribution.json` / `validation_sample_distribution.json` / `eval_sample_distribution.json`
+- dataloader / manifest：`--sample-manifest`、`--val-sample-manifest`、`--rebuild-sample-manifest`、`--prefetch-factor`、`--persistent-workers`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 - evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载
 
@@ -253,6 +254,28 @@ conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
 匹配条件是 `command == 1 && speed < 0.1 && abs(target_end_y) > 4.0`。权重只用于训练集；validation 和 eval-only 的 loss 保持未加权，便于和旧实验直接对比。训练日志会打印当前 batch 的 `hard_left_turn_stop` 数量和 `mean_sample_weight`，`training_config.json` 会记录 hard-case criteria。
 
 启动时脚本会额外抽样统计 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量，并写入输出目录的 sample distribution JSON。默认最多统计 `4096` 个样本；可用 `--dataset-stats-max-samples 0` 关闭，或调大以覆盖完整数据集。
+
+## Sample Manifest and CPU Bottlenecks
+
+raw B2D Full loader 的主要 CPU / IO 压力来自反复解 `json.gz` 构造 `spatial_path` target、解 `.laz` 并生成 LiDAR histogram，以及图像解码 / resize。训练入口现在支持 sample manifest，先把每个样本的 route/frame、`status_feature` 所需 command/speed 和 trajectory target 落盘为 JSONL，后续训练可直接读取 manifest，避免每个 epoch 反复扫描未来 annotation：
+
+```bash
+--sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage3_train_manifest.jsonl
+```
+
+如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会直接读取。需要强制重建时加：
+
+```bash
+--rebuild-sample-manifest
+```
+
+验证集或 eval-only 使用不同 root 时，应单独指定：
+
+```bash
+--val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_manifest.jsonl
+```
+
+DataLoader worker 会在初始化时限制 OpenCV / torch 内部线程，避免在 7 CPU 核限制下过度抢占。可用 `--prefetch-factor 2` 调整预取；`--persistent-workers` 默认关闭，建议只在远端长训确认稳定后开启。
 
 ## Eval Error Inspection
 

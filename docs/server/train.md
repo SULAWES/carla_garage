@@ -346,3 +346,34 @@ python team_code/train_diffusiondrive.py \
     --hard-left-turn-stop-loss-weight 5.0 \
     --dataset-stats-max-samples 20000 \
     2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps_train.log
+
+eval 
+
+python tools/inspect_diffusiondrive_eval_errors.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --route-glob "*" \
+    --checkpoint /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps/latest.pth \
+    --top-k 50 \
+    --max-samples 1024 \
+    --frame-sampling 5 \
+    --batch-size 64 \
+    --num-workers 6 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --output-csv /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps/nsj_left_errors.csv
+
+
+python tools/inspect_diffusiondrive_eval_errors.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset/HighwayCutIn \
+    --route-glob "*" \
+    --checkpoint /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps/latest.pth \
+    --top-k 50 \
+    --max-samples 1024 \
+    --frame-sampling 5 \
+    --batch-size 64 \
+    --num-workers 6 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --output-csv /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps/weight5_bs32_512_HighwayCutIn.csv
