@@ -263,7 +263,9 @@ raw B2D Full loader 的主要 CPU / IO 压力来自反复解 `json.gz` 构造 `s
 --sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage3_train_manifest.jsonl
 ```
 
-如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会直接读取。需要强制重建时加：
+manifest 当前缓存的是样本发现与 target 构造结果，格式版本为 `diffusiondrive_sample_manifest_v1`，每行包含绝对 `route_dir`、`frame`、`command`、`speed` 和 `trajectory`。它不缓存图像 tensor 或 LiDAR histogram，所以训练时仍会在线解码 `rgb/*.jpg` 和 `lidar/*.laz`；优化重点是避免每个 epoch 为了构造空间轨迹 target 重复读取大量未来 `measurements/*.json.gz`。
+
+如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会直接读取。manifest 与数据选择和 target 语义绑定，至少要按 `root-dir / route-glob / frame-sampling / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 区分命名；这些参数变化后应换一个 manifest 文件或强制重建。需要强制重建时加：
 
 ```bash
 --rebuild-sample-manifest
@@ -276,6 +278,25 @@ raw B2D Full loader 的主要 CPU / IO 压力来自反复解 `json.gz` 构造 `s
 ```
 
 DataLoader worker 会在初始化时限制 OpenCV / torch 内部线程，避免在 7 CPU 核限制下过度抢占。可用 `--prefetch-factor 2` 调整预取；`--persistent-workers` 默认关闭，建议只在远端长训确认稳定后开启。
+
+在远端 1 GPU 最多 7 CPU 核的限制下，推荐组合是：
+
+```bash
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+python team_code/train_diffusiondrive.py \
+  ... \
+  --num-workers 5 \
+  --prefetch-factor 2 \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_train_fs5_spatial.jsonl \
+  --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl
+```
+
+可以把 `--num-workers` 试到 `6`，但不要超过作业实际申请的 CPU 核数。`--persistent-workers` 会减少 epoch 切换时重启 worker 的开销，但如果远端长训中遇到 dataloader 卡住或退出不干净，先保持默认关闭。
 
 ## Eval Error Inspection
 

@@ -50,6 +50,10 @@ carla_dataset/
   - `--max-samples-per-scenario`
   - Full 原生 `rgb + measurements` 结构
 - `tools/inspect_diffusiondrive_eval_errors.py` 可输出 per-sample `l1 / ade / fde` 和 top-k 高误差 route/frame
+- 训练入口已加入 CPU / IO 优化：
+  - `--sample-manifest` / `--val-sample-manifest` 把 route/frame、command、speed 和 trajectory target 缓存为 JSONL，避免长训中每个 epoch 反复读取未来 `measurements/*.json.gz`
+  - DataLoader worker 初始化时限制 OpenCV / torch 内部线程，并支持 `--prefetch-factor` 与可选 `--persistent-workers`
+  - 在学校 1 GPU 最多 7 CPU 核限制下，远端训练优先用 `--num-workers 5/6`，并在 shell 里设置 `OMP_NUM_THREADS=1`、`MKL_NUM_THREADS=1`、`OPENBLAS_NUM_THREADS=1`、`NUMEXPR_NUM_THREADS=1`、`OPENCV_NUM_THREADS=1`
 
 ## 远端 Smoke
 
@@ -246,6 +250,31 @@ l1 > 2: 107
 - scenario-balanced 采样有效。
 - 主要短板已经从“训练链路是否能跑”转为“复杂路口左转 / 静止后起步转向的条件建模和采样权重”。
 
+## Stage3 / Stage4: Hard-Case Weighting 与 Manifest 长训
+
+Stage3 使用 Stage2 checkpoint 初始化，并对 `command=1 && speed<0.1 && abs(target_end_y)>4` 的低速左转 hard case 做 loss weighting。`hard_left_weight5_bs32_512ps` 在 `NonSignalizedJunctionLeftTurn` 的 per-sample CSV 诊断上相对 Stage2 有小幅改善：
+
+| Metric | Stage2 | Stage3 weight5 |
+|---|---:|---:|
+| NSJ L1 mean | 0.6884 | 0.6062 |
+| NSJ L1 p95 | 4.3950 | 4.1710 |
+| NSJ hard-case L1 mean | 3.7465 | 3.4214 |
+| NSJ `l1 > 2` count | 118 | 106 |
+
+同时抽查 `VehicleTurningRoute` 和 `HighwayCutIn` 未见明显退化，其中 `HighwayCutIn` 的 L1 mean 约 `0.0282`，`VehicleTurningRoute` 的 L1 mean 约 `0.0743`。
+
+Stage4 主要用于验证新加入的 manifest / DataLoader CPU 优化能支撑更长训练：
+
+- `--sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage4_train_1024ps_fs5_spatial.jsonl`
+- `--val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl`
+- `--max-samples-per-scenario 1024`
+- `--batch-size 64`
+- `--num-workers 6`
+- `--prefetch-factor 2`
+- `--dataset-stats-max-samples 0`
+
+这一路线工程上能减少 target 构造带来的 CPU 压力，但当前 Stage4 中途验证 `validation step=9000 trajectory_unweighted=2.1736`，弱于 Stage3 在 step 3000 的 `1.3921`。因此 Stage4 暂时只作为“缓存优化已接入长训命令”的工程记录，不应直接当作效果最佳 checkpoint；下一步更应考虑 hard-case oversampling，而不是单纯继续扩大每场景样本数或拉长训练。
+
 ## 建议下一步
 
 优先级从高到低：
@@ -253,13 +282,16 @@ l1 > 2: 107
 1. 使用已新增的 hard-case loss weighting 做小实验：
    - `--hard-left-turn-stop-loss-weight` 会对 `command=1 && speed<0.1 && abs(target_end_y)>4` 样本加权。
    - 先从 Stage2 checkpoint 短训，观察 `NonSignalizedJunctionLeftTurn` 是否继续下降，以及其它场景是否受损。
-2. 使用已新增的 sample distribution JSON 确认 hard cases 是否进入训练：
+2. 优先实现 hard-case oversampling：
+   - 当前 weighting 能改善但 hard case 在 batch 中仍然稀疏，Stage4 日志里常见 `hard_left_turn_stop=0-3/64`。
+   - 建议在 dataset 层按同一 hard-case predicate 复制训练样本，validation / eval-only 保持原始分布。
+3. 使用已新增的 sample distribution JSON 确认 hard cases 是否进入训练：
    - 脚本会落盘 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量。
    - 用 `--dataset-stats-max-samples` 控制统计样本数；默认最多统计 `4096` 个样本。
-3. 可视化 top error 样本：
+4. 可视化 top error 样本：
    - raw image
    - target trajectory
    - predicted trajectory
    - speed / command
-4. 再考虑扩大 `max-samples-per-scenario` 到 `512 / 1024` 做更长 balanced stage。
-5. 进入 CARLA 闭环前，先确认远端已同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`，否则新版 agent 会因缺少 `GlobalConfig.diffusiondrive_spatial_pid*` 参数在 setup 阶段失败。然后使用默认空间 PID 做 smoke，并 A/B `DIFFUSIONDRIVE_SPATIAL_PID=0` 的旧 time-index fallback；同时可打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1`、`DIFFUSIONDRIVE_DEBUG_INTERVAL=20` 记录 command / desired speed / turn ratio / aim waypoint / control，重点观察路口低速转弯、停车起步和 emergency stop 触发。
+5. 再考虑扩大 `max-samples-per-scenario` 到 `512 / 1024` 做更长 balanced stage，但需要用 manifest 缓存降低 CPU 开销，并保留 NSJ eval / CSV 诊断。
+6. 进入 CARLA 闭环前，先确认远端已同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`，否则新版 agent 会因缺少 `GlobalConfig.diffusiondrive_spatial_pid*` 参数在 setup 阶段失败。然后使用默认空间 PID 做 smoke，并 A/B `DIFFUSIONDRIVE_SPATIAL_PID=0` 的旧 time-index fallback；同时可打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1`、`DIFFUSIONDRIVE_DEBUG_INTERVAL=20` 记录 command / desired speed / turn ratio / aim waypoint / control，重点观察路口低速转弯、停车起步和 emergency stop 触发。
