@@ -32,3 +32,6 @@ status_feature 当前名：DiffusionDrive 的低维条件 token
 
 
 command时序差异出自对garage sensor_agent的继承
+
+
+先用CPU缓存数据，然后再申请GPU训练。

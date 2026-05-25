@@ -42,7 +42,7 @@ python team_code/train_diffusiondrive.py \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --load-file ""
 
-吞吐量测试
+### 吞吐量测试
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset \
@@ -61,7 +61,7 @@ python team_code/train_diffusiondrive.py \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --load-file ""
 
-1000step
+### 1000step
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset \
@@ -85,7 +85,7 @@ python team_code/train_diffusiondrive.py \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --load-file ""
 
-大batch
+### 大batch
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset \
@@ -110,7 +110,7 @@ python team_code/train_diffusiondrive.py \
     --load-file ""
 
 
-小验证
+### 小验证
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset/HighwayCutIn \
@@ -174,7 +174,7 @@ for SCENE in HighwayCutIn InterurbanActorFlow NonSignalizedJunctionLeftTurn Park
       --resume-file ~/ltr/dd_logs/full_stage1/spatial_path_bs16_lr1e-4/latest.pth
   done
 
-补训
+### 补训
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
@@ -260,7 +260,7 @@ python tools/inspect_diffusiondrive_eval_errors.py \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --output-csv ~/ltr/dd_logs/full_eval_stage2/nsj_left_errors.csv
 
-stage3 
+### stage3 
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset \
@@ -313,7 +313,7 @@ python team_code/train_diffusiondrive.py \
     --dataset-stats-max-samples 4096
 
 
-stage3 long for night
+### stage3 long for night
 
 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset \
@@ -377,6 +377,8 @@ python tools/inspect_diffusiondrive_eval_errors.py \
     --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --output-csv /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps/weight5_bs32_512_HighwayCutIn.csv
+
+### stage4
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -463,7 +465,7 @@ for SCENE in Accident HighwayCutIn InterurbanActorFlow NonSignalizedJunctionLeft
         --output-csv /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps/weight5_bs32_512_${SCENE}.csv
 done
 
-stage5
+### stage5
 
 mkdir -p /share/home/u19666033/ltr/dd_logs/full_stage5
 
@@ -472,7 +474,6 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export OPENCV_NUM_THREADS=1
-
 
 CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
     --root-dir /share/home/u19666033/djy/carla_dataset \
@@ -502,11 +503,37 @@ CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
     --device cuda:0 \
     --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
     --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
-    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
-    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
     --load-file /share/home/u19666033/ltr/dd_logs/full_stage4/hard_left_weight5_bs64_1024ps_manifest/latest.pth \
     --hard-left-turn-stop-loss-weight 3.0 \
     --dataset-stats-max-samples 0 \
     --sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage5_train_2048ps_fs5_spatial.jsonl \
     --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
     2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_stage5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5_train.log
+
+
+### cpu缓存
+
+CPU 作业里先跑 train manifest：
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --output-manifest /share/home/u19666033/ltr/dd_cache/full_stage5_train_2048ps_fs5_spatial.jsonl \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --max-samples-per-scenario 2048 \
+    --num-workers 16 \
+    --rebuild \
+    --verify-load
+
+再跑 val manifest：
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --route-glob "*" \
+    --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
+    --frame-sampling 5 \
+    --max-samples 1024 \
+    --num-workers 16 \
+    --rebuild \
+    --verify-load

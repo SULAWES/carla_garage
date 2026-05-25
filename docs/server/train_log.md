@@ -56,11 +56,11 @@ epoch=0 step=1000 lr=0 loss=185.0877 avg=153.9092 trajectory_unweighted=15.4240 
 
   mkdir -p ~/ltr/dd_logs/gpu_logs
 
-  while true; do
-    date
-    nvidia-smi
-    sleep 10
-  done > ~/ltr/dd_logs/gpu_logs/l40_monitor.log 2>&1 &
+while true; do
+  date
+  nvidia-smi
+  sleep 10
+done > ~/ltr/dd_logs/gpu_logs/l40_monitor.log 2>&1 &
 
   记下它打印的后台 job id 不重要，之后直接跑训练：
 
