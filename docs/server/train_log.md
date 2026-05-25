@@ -229,3 +229,6 @@ rank scenario route frame l1 ade fde speed command target_path_length target_end
 50 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 505 4.4298 6.4051 9.6506 0.000 1 11.467 (5.55,
 -10.04) (11.02,-2.09)
 Wrote CSV: /share/home/u19666033/ltr/dd_logs/full_eval_stage2/nsj_left_errors.csv
+
+
+tail -n 100 /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps_train.log
