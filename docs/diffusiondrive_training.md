@@ -298,6 +298,37 @@ python team_code/train_diffusiondrive.py \
 
 可以把 `--num-workers` 试到 `6`，但不要超过作业实际申请的 CPU 核数。`--persistent-workers` 会减少 epoch 切换时重启 worker 的开销，但如果远端长训中遇到 dataloader 卡住或退出不干净，先保持默认关闭。
 
+如果实验室空闲 CPU 核较多，可以先用 CPU-only 作业预构建 manifest，再启动 GPU 训练。这样 GPU 作业只读取已生成的 JSONL，不在训练开始时长时间占 GPU 等待 target 构建。专用脚本是：
+
+```bash
+python tools/build_diffusiondrive_manifest.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset \
+  --route-glob "*/*" \
+  --output-manifest /share/home/u19666033/ltr/dd_cache/full_stage5_train_2048ps_fs5_spatial.jsonl \
+  --frame-sampling 5 \
+  --balanced-scenarios \
+  --max-samples-per-scenario 2048 \
+  --num-workers 32 \
+  --rebuild \
+  --verify-load
+```
+
+验证集 manifest 单独构建：
+
+```bash
+python tools/build_diffusiondrive_manifest.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+  --route-glob "*" \
+  --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
+  --frame-sampling 5 \
+  --max-samples 1024 \
+  --num-workers 16 \
+  --rebuild \
+  --verify-load
+```
+
+`--num-workers` 是 CPU 多进程数，只用于并行读取 annotation 和构造 trajectory target；不要把它和训练 DataLoader 的 `--num-workers` 混淆。预构建 manifest 时的 `root-dir / route-glob / frame-sampling / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 必须和后续 GPU 训练保持一致。
+
 ## Eval Error Inspection
 
 `tools/inspect_diffusiondrive_eval_errors.py` 用于定位高误差样本。它输出的是模型推理轨迹和 target 之间的 per-sample 诊断误差，不是训练里的 batch-reduced focal + regression loss。
