@@ -49,10 +49,13 @@ class Bench2DriveDiffusionDataset(Dataset):
         sample_manifest_path: Optional[str | Path] = None,
         rebuild_sample_manifest: bool = False,
     ) -> None:
+        self.root_dirs = [Path(root) for root in root_dirs]
         self.config = config
         self.num_poses = num_poses
         self.future_stride = future_stride
         self.frame_sampling = frame_sampling
+        self.max_samples = max_samples
+        self.route_glob = route_glob
         self.model_image_size = model_image_size
         self.jpeg_artifact = jpeg_artifact
         self.target_mode = target_mode
@@ -73,12 +76,12 @@ class Bench2DriveDiffusionDataset(Dataset):
                 self.sample_manifest_path
             )
         else:
-            self.samples, self.scenario_sample_counts = self._discover_samples(root_dirs, route_glob, max_samples)
+            self.samples, self.scenario_sample_counts = self._discover_samples(self.root_dirs, route_glob, max_samples)
             if self.sample_manifest_path:
                 self.sample_metadata = self._write_sample_manifest(self.sample_manifest_path)
 
         if not self.samples:
-            roots = ", ".join(str(root) for root in root_dirs)
+            roots = ", ".join(str(root) for root in self.root_dirs)
             raise RuntimeError(f"No trainable Bench2Drive samples found under: {roots}")
 
     def __len__(self) -> int:
@@ -164,6 +167,7 @@ class Bench2DriveDiffusionDataset(Dataset):
         samples: List[tuple[Path, int]] = []
         metadata: List[dict] = []
         scenario_counts: dict[str, int] = {}
+        header: Optional[dict] = None
 
         with manifest_path.open("r", encoding="utf-8") as file:
             for line in file:
@@ -171,6 +175,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                     continue
                 record = json.loads(line)
                 if record.get("type") == "metadata":
+                    header = record
                     continue
                 route_dir = Path(record["route_dir"])
                 frame = int(record["frame"])
@@ -183,8 +188,64 @@ class Bench2DriveDiffusionDataset(Dataset):
                 scenario = route_dir.parent.name
                 scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
 
+        self._validate_sample_manifest_header(manifest_path, header, len(samples))
         print(f"Loaded sample manifest: {manifest_path} ({len(samples)} samples)", flush=True)
         return samples, metadata, scenario_counts
+
+    def _validate_sample_manifest_header(
+        self,
+        manifest_path: Path,
+        header: Optional[dict],
+        loaded_sample_count: int,
+    ) -> None:
+        if header is None:
+            raise RuntimeError(f"Sample manifest is missing metadata header: {manifest_path}")
+        if header.get("format") != "diffusiondrive_sample_manifest_v1":
+            raise RuntimeError(
+                f"Unsupported sample manifest format in {manifest_path}: {header.get('format')!r}"
+            )
+
+        expected = {
+            "target_mode": self.target_mode,
+            "num_poses": self.num_poses,
+            "future_stride": self.future_stride,
+            "spatial_target_first_distance": self.spatial_target_first_distance,
+            "spatial_target_interval": self.spatial_target_interval,
+            "spatial_target_max_future_frames": self.spatial_target_max_future_frames,
+            "frame_sampling": self.frame_sampling,
+            "max_samples": self.max_samples,
+            "balanced_scenarios": self.balanced_scenarios,
+            "max_samples_per_scenario": self.max_samples_per_scenario,
+            "route_glob": self.route_glob,
+        }
+        mismatches = []
+        for key, expected_value in expected.items():
+            if key not in header:
+                continue
+            actual_value = header[key]
+            if not _manifest_values_match(actual_value, expected_value):
+                mismatches.append(f"{key}: manifest={actual_value!r} current={expected_value!r}")
+
+        if "root_dir" in header:
+            expected_roots = sorted(_normalize_manifest_root(root) for root in self.root_dirs)
+            header_roots = header["root_dir"] if isinstance(header["root_dir"], list) else [header["root_dir"]]
+            actual_roots = sorted(_normalize_manifest_root(root) for root in header_roots)
+            if actual_roots != expected_roots:
+                mismatches.append(f"root_dir: manifest={actual_roots!r} current={expected_roots!r}")
+
+        if mismatches:
+            details = "; ".join(mismatches)
+            raise RuntimeError(
+                f"Sample manifest does not match current dataset arguments: {manifest_path}. {details}. "
+                "Use a matching manifest path or rebuild with --rebuild-sample-manifest."
+            )
+
+        declared_sample_count = header.get("sample_count")
+        if declared_sample_count is not None and int(declared_sample_count) != loaded_sample_count:
+            raise RuntimeError(
+                f"Sample manifest sample_count mismatch in {manifest_path}: "
+                f"header={declared_sample_count} loaded={loaded_sample_count}"
+            )
 
     def _write_sample_manifest(self, manifest_path: Path) -> List[dict]:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,6 +253,12 @@ class Bench2DriveDiffusionDataset(Dataset):
         header = {
             "type": "metadata",
             "format": "diffusiondrive_sample_manifest_v1",
+            "root_dir": [str(root) for root in self.root_dirs],
+            "route_glob": self.route_glob,
+            "frame_sampling": self.frame_sampling,
+            "max_samples": self.max_samples,
+            "balanced_scenarios": self.balanced_scenarios,
+            "max_samples_per_scenario": self.max_samples_per_scenario,
             "target_mode": self.target_mode,
             "num_poses": self.num_poses,
             "future_stride": self.future_stride,
@@ -338,6 +405,21 @@ def _round_robin_scenario_samples(
             if max_samples is not None and len(samples) >= max_samples:
                 return samples
     return samples
+
+
+def _manifest_values_match(actual: object, expected: object) -> bool:
+    if actual is None or expected is None:
+        return actual is expected
+    if isinstance(actual, float) or isinstance(expected, float):
+        try:
+            return math.isclose(float(actual), float(expected), rel_tol=1e-9, abs_tol=1e-9)
+        except (TypeError, ValueError):
+            return False
+    return actual == expected
+
+
+def _normalize_manifest_root(root: str | Path) -> str:
+    return str(Path(root).expanduser().resolve(strict=False))
 
 
 def load_annotation(route_dir: Path, frame: int) -> dict:

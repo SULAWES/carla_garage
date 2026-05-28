@@ -129,7 +129,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         self.stuck_detector = 0
         self.force_move = 0
-        self.stop_sign_controller = int(os.environ.get("STOP_CONTROL", 1))
+        self.stop_sign_controller = int(os.environ.get("STOP_CONTROL", 0))
         print("Use stop sign controller:", self.stop_sign_controller)
         self.stop_sign_criteria = None
         self.hero_actor = None

@@ -17,7 +17,7 @@
 
 - 已接入 stuck detection，包括 `stuck_detector`、`force_move` / creep 逻辑和 `creep_throttle` 配置。
 - 已接入 safety box，包括前方 LiDAR 安全框过滤、emergency stop 逻辑和相关阈值配置。
-- 已接入基于 CARLA world stop sign actor 的 stop sign controller，不再依赖旧版 bbox stop sign 检测头。
+- 已接入基于 CARLA world stop sign actor 的 stop sign controller，不再依赖旧版 bbox stop sign 检测头；baseline-basic / sensor-only 主线默认 `STOP_CONTROL=0`，privileged 规则停车 ablation 需显式开启。
 - 已梳理 `status_feature` 与 `extra_sensors` 的职责边界，明确当前 agent 显式构造的是 command、velocity、acceleration 组合。
 
 ## LiDAR 时序与对齐

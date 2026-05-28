@@ -226,8 +226,14 @@ def main() -> None:
             num_poses=args.num_poses,
             future_stride=args.future_stride,
             frame_sampling=args.frame_sampling,
+            max_samples=args.max_samples,
             route_glob=args.route_glob,
             target_mode=args.target_mode,
+            spatial_target_first_distance=args.spatial_target_first_distance,
+            spatial_target_interval=args.spatial_target_interval,
+            spatial_target_max_future_frames=args.spatial_target_max_future_frames,
+            balanced_scenarios=args.balanced_scenarios,
+            max_samples_per_scenario=args.max_samples_per_scenario,
             sample_manifest_path=args.output_manifest,
         )
         print(f"Verified manifest load: {len(loaded)} samples", flush=True)

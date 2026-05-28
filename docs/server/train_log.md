@@ -120,115 +120,44 @@ python team_code/train_diffusiondrive.py ... 2>&1 | tee ~/ltr/dd_logs/full_stage
 mkdir -p ~/ltr/dd_logs/full_stage0/spatial_path_bs4_lr1e-4
 
 
-Samples: 1024                                                                                                           
-Scenario samples: {'NonSignalizedJunctionLeftTurn': 1024}                                                               
-Loaded model checkpoint: /share/home/u19666033/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth      
-l1: mean=0.6884 median=0.0658 p90=2.4620 p95=4.3950 max=7.3713                                                          
-ade: mean=1.0545 median=0.1085 p90=4.0822 p95=6.4285 max=10.4534                                                        
-fde: mean=1.9395 median=0.2208 p90=6.8487 p95=10.0235 max=17.0889                                                       
-Top samples by L1 trajectory error:                                                                                     
-rank scenario route frame l1 ade fde speed command target_path_length target_end pred_end                               
-1 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 350 7.3713 10.4483 17.0889 0.000 1 11.472 (-1.4
-6,-11.38) (11.43,-0.16)                                                                                                 
-2 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 330 7.3672 10.4427 17.0236 0.000 1 11.468 (-1.4
-7,-11.37) (11.37,-0.19)                                                                                                 
-3 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 325 7.3607 10.4395 16.9908 0.000 1 11.468 (-1.5
-1,-11.37) (11.47,-0.40)                                                                                                 
-4 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 355 7.3105 10.3671 16.7346 0.000 1 11.472 (-1.4
-6,-11.38) (11.38,-0.65)                                                                                                 
-5 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 340 7.2517 10.2905 16.6012 0.002 1 11.471 (-1.4
-6,-11.38) (11.36,-0.83)                                                                                                 
-6 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 645 7.1674 10.4534 16.3300 0.001 1 11.428 (-3.6
-2,-10.84) (10.73,-3.04)                                                                                                 
-7 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 335 7.0842 10.0702 16.0059 0.001 1 11.468 (-1.4
-7,-11.37) (11.20,-1.60)                                                                                                 
-8 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 345 7.0538 10.0336 15.8409 0.000 1 11.472 (-1.4
-6,-11.38) (11.14,-1.79)                                                                                                 
-9 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 610 6.9295 9.8789 16.4591 0.000 1 11.444 (1.21,
--11.38) (10.93,1.90)                                                                                                    
-10 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 540 6.8940 9.7616 15.6761 0.000 1 11.451 (-0.4
-1,-11.44) (11.42,-1.16)                                                                                                 
-11 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 615 6.6766 9.4647 15.6212 0.000 1 11.444 (1.20
-,-11.38) (11.33,0.52)                                                                                                   
-12 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 690 6.5004 9.2022 14.9454 0.000 1 11.445 (1.26
-,-11.37) (11.45,-0.44)                                                                                                  
-13 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 685 6.3811 9.0295 14.3845 0.000 1 11.445 (1.26
-,-11.37) (11.27,-1.04)                                                                                                  
-14 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 635 6.3648 9.0051 14.3878 0.000 1 11.459 (1.23
-,-11.39) (11.29,-1.10)                                                                                                  
-15 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 630 6.2162 8.7941 13.8196 0.000 1 11.459 (1.23
-,-11.39) (11.14,-1.76)                                                                                                  
-16 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 625 6.2015 8.7732 13.5782 0.002 1 11.459 (1.23
-,-11.39) (11.03,-1.99)                                                                                                  
-17 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 620 6.1509 8.7010 13.6339 0.025 1 11.448 (1.21
-,-11.38) (11.18,-2.08)                                                                                                  
-18 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 640 5.8718 8.3130 12.4689 0.001 1 11.460 (1.23
-,-11.39) (10.71,-3.29)                                                                                                  
-19 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 575 5.8075 8.4059 14.1067 0.000 1 11.452 (3.86
-,-10.78) (11.08,1.34)                                                                      
-20 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 580 5.7229 8.2572 13.8863 0.000 1 11.452 (3.86
-,-10.78) (11.20,1.00)
-21 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 585 5.3531 7.6465 11.9066 0.003 1 11.461 (3.88
-,-10.78) (11.19,-1.38)
-22 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 500 5.3343 7.8151 13.3665 0.000 1 11.483 (4.95
-,10.36) (11.21,-1.45)
-23 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 600 5.2836 7.5461 11.7185 0.000 1 11.462 (3.89
-,-10.78) (11.18,-1.61)
-24 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 595 5.2598 7.5077 11.7746 0.000 1 11.462 (3.89
-,-10.78) (11.25,-1.60)
-25 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 590 5.2591 7.5089 11.5835 0.001 1 11.461 (3.89
-,-10.78) (11.16,-1.76)
-26 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 520 5.1765 7.7200 12.9514 0.000 1 11.476 (5.57
-,-10.04) (10.99,1.73)
-27 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 605 4.9583 7.0529 10.4944 0.000 1 11.462 (3.89
-,-10.78) (10.79,-2.88)
-28 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 225 4.7369 6.9298 11.2137 0.000 1 11.476 (5.75
-,-9.93) (11.47,-0.29)
-29 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 530 4.6661 6.7889 10.6766 0.000 1 11.477 (5.56
-,-10.04) (11.23,-0.99)
-30 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 250 4.6563 6.7857 10.8039 0.000 1 11.477 (5.75
-,-9.93) (11.47,-0.77)
-31 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 425 4.6561 6.8111 11.0383 0.001 1 11.470 (5.82
-,-9.89) (11.49,-0.41)
-32 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 185 4.6406 6.7749 10.6101 0.000 1 11.474 (5.70
-,-9.96) (11.27,-0.93)
-33 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 525 4.6279 6.7182 10.3982 0.000 1 11.477 (5.56
-,-10.04) (11.23,-1.32)
-34 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 245 4.6050 6.7106 10.7638 0.000 1 11.477 (5.75
-,-9.93) (11.46,-0.81)
-35 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 440 4.6012 6.7205 10.7341 0.000 1 11.467 (5.88
-,-9.84) (11.41,-0.65)
-36 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 220 4.5914 6.6850 10.4938 0.000 1 11.476 (5.75
-,-9.93) (11.29,-1.02)
-37 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 420 4.5852 6.6846 10.5080 0.001 1 11.470 (5.82
-,-9.89) (11.32,-0.93)
-38 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 150 4.5654 6.6020 10.1714 0.001 1 11.471 (5.37
-,-10.14) (11.19,-1.80)
-39 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 515 4.5598 6.6098 10.1601 0.001 1 11.477 (5.57
-,-10.04) (11.21,-1.59)
-40 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 210 4.5352 6.6695 10.8169 0.001 1 11.481 (6.19
-,-9.67) (11.48,-0.24)
-41 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 445 4.4998 6.5548 10.1118 0.002 1 11.477 (5.90
-,-9.85) (11.36,-1.34)
-42 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 230 4.4816 6.5082 9.9415 0.005 1 11.480 (5.75,
--9.94) (11.21,-1.63)
-43 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 240 4.4687 6.4973 10.1635 0.000 1 11.477 (5.75
-,-9.93) (11.32,-1.43)
-44 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 510 4.4618 6.4585 9.8241 0.001 1 11.467 (5.55,
--10.04) (11.10,-1.93)
-45 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 195 4.4539 6.5347 10.5611 0.007 1 11.480 (6.19
-,-9.67) (11.52,-0.55)
-46 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 450 4.4528 6.4929 10.1319 0.000 1 11.476 (5.90
-,-9.84) (11.26,-1.25)
-47 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 435 4.4517 6.4853 10.0742 0.000 1 11.467 (5.88
-,-9.84) (11.21,-1.30)
-48 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 535 4.4390 6.4171 9.7415 0.000 1 11.477 (5.56,
--10.04) (11.10,-2.02)
-49 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 320 4.4365 6.5309 10.4682 0.001 1 11.492 (6.27
-,-9.63) (11.39,-0.50)
-50 NonSignalizedJunctionLeftTurn Town12_Rep0_3388_0_route0_11_08_18_28_21 505 4.4298 6.4051 9.6506 0.000 1 11.467 (5.55,
--10.04) (11.02,-2.09)
-Wrote CSV: /share/home/u19666033/ltr/dd_logs/full_eval_stage2/nsj_left_errors.csv
-
 
 tail -n 100 /share/home/u19666033/ltr/dd_logs/full_stage3/hard_left_weight5_bs32_512ps_train.log
+
+
+先在训练前启动监控：
+
+mkdir -p /share/home/u19666033/ltr/dd_logs/mem_logs
+
+while true; do
+  echo "===== $(date '+%F %T') ====="
+
+  echo "[free]"
+  free -h
+
+  echo "[python processes by RSS]"
+  ps -C python -o pid,ppid,rss,vsz,stat,etime,cmd --sort=-rss | head -40
+
+  echo "[train process tree]"
+  PID=$(pgrep -f "team_code/train_diffusiondrive.py" | head -n 1)
+  if [ -n "$PID" ]; then
+    echo "train_pid=$PID"
+
+    echo "[main smaps_rollup]"
+    cat /proc/$PID/smaps_rollup 2>/dev/null | egrep "Rss|Pss|Private|Shared|Swap" || true
+
+    echo "[children]"
+    CHILDREN=$(cat /proc/$PID/task/$PID/children 2>/dev/null)
+    for CPID in $CHILDREN; do
+      echo "--- child $CPID ---"
+      ps -p $CPID -o pid,ppid,rss,vsz,stat,etime,cmd
+      cat /proc/$CPID/smaps_rollup 2>/dev/null | egrep "Rss|Pss|Private|Shared|Swap" || true
+    done
+  fi
+
+  echo
+  sleep 30
+done > /share/home/u19666033/ltr/dd_logs/mem_logs/mem_watch.log 2>&1 &
+
+  然后正常跑训练。过程中单窗口查看：
+
+  tail -f /share/home/u19666033/ltr/dd_logs/mem_logs/mem_watch.log

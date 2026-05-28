@@ -61,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--frame-sampling", type=int, default=5)
+    parser.add_argument("--sample-manifest", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -262,6 +263,7 @@ def main() -> None:
         spatial_target_max_future_frames=args.spatial_target_max_future_frames,
         balanced_scenarios=args.balanced_scenarios,
         max_samples_per_scenario=args.max_samples_per_scenario,
+        sample_manifest_path=args.sample_manifest,
     )
     dataloader = DataLoader(
         IndexedDataset(dataset),

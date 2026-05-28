@@ -510,6 +510,21 @@ CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
     --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
     2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_stage5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5_train.log
 
+for SCENE in Accident HighwayCutIn InterurbanActorFlow NonSignalizedJunctionLeftTurn ParkingCutIn VehicleTurningRoute; do
+    python tools/inspect_diffusiondrive_eval_errors.py \
+        --root-dir /share/home/u19666033/djy/carla_dataset/$SCENE \
+        --route-glob "*" \
+        --checkpoint /share/home/u19666033/ltr/dd_logs/full_stage5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5/latest.pth \
+        --top-k 50 \
+        --max-samples 1024 \
+        --frame-sampling 5 \
+        --batch-size 64 \
+        --num-workers 6 \
+        --device cuda:0 \
+        --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+        --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+        --output-csv /share/home/u19666033/ltr/dd_logs/full_stage5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5_${SCENE}.csv
+done
 
 ### cpu缓存
 
@@ -537,3 +552,116 @@ python tools/build_diffusiondrive_manifest.py \
     --num-workers 16 \
     --rebuild \
     --verify-load
+
+### stage6
+
+mkdir -p /share/home/u19666033/ltr/dd_logs/full_stage6
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --val-root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir /share/home/u19666033/ltr/dd_logs/full_stage6 \
+    --id stage5init_weight1_bs64_2048ps_lr5e-6 \
+    --epochs 6 \
+    --batch-size 64 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --max-samples-per-scenario 2048 \
+    --num-workers 6 \
+    --prefetch-factor 2 \
+    --scheduler cosine \
+    --warmup-steps 300 \
+    --min-lr 1e-6 \
+    --val-every-steps 3000 \
+    --val-frame-sampling 5 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps 1500 \
+    --log-every 50 \
+    --lr 5e-6 \
+    --weight-decay 1e-4 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file /share/home/u19666033/ltr/dd_logs/full_stage5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5/latest.pth \
+    --hard-left-turn-stop-loss-weight 1.0 \
+    --dataset-stats-max-samples 0 \
+    --sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage5_train_2048ps_fs5_spatial.jsonl \
+    --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
+    2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight1_bs64_2048ps_lr5e-6_train.log
+
+
+for SCENE in Accident HighwayCutIn InterurbanActorFlow NonSignalizedJunctionLeftTurn ParkingCutIn VehicleTurningRoute; do
+    python tools/inspect_diffusiondrive_eval_errors.py \
+        --root-dir /share/home/u19666033/djy/carla_dataset/$SCENE \
+        --route-glob "*" \
+        --checkpoint /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight1_bs64_2048ps_lr5e-6/latest.pth \
+        --top-k 50 \
+        --max-samples 1024 \
+        --frame-sampling 5 \
+        --batch-size 64 \
+        --num-workers 6 \
+        --device cuda:0 \
+        --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+        --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+        --output-csv /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight1_bs64_2048ps_lr5e-6/stage5init_weight1_bs64_2048ps_lr5e-6_${SCENE}.csv
+done
+
+CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --val-root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir /share/home/u19666033/ltr/dd_logs/full_stage6 \
+    --id stage5init_weight2_bs64_2048ps_lr5e-6 \
+    --hard-left-turn-stop-loss-weight 2.0 \
+    --epochs 6 \
+    --batch-size 64 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --max-samples-per-scenario 2048 \
+    --num-workers 6 \
+    --prefetch-factor 2 \
+    --scheduler cosine \
+    --warmup-steps 300 \
+    --min-lr 1e-6 \
+    --val-every-steps 3000 \
+    --val-frame-sampling 5 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps 1500 \
+    --log-every 50 \
+    --lr 5e-6 \
+    --weight-decay 1e-4 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file /share/home/u19666033/ltr/dd_logs/full_stage5/stage4init_weight3_bs64_2048ps_manifest_lr1e-5/latest.pth \
+    --dataset-stats-max-samples 0 \
+    --sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage5_train_2048ps_fs5_spatial.jsonl \
+    --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
+    2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight2_bs64_2048ps_lr5e-6.log
+
+for SCENE in Accident HighwayCutIn InterurbanActorFlow NonSignalizedJunctionLeftTurn ParkingCutIn VehicleTurningRoute; do
+    python tools/inspect_diffusiondrive_eval_errors.py \
+        --root-dir /share/home/u19666033/djy/carla_dataset/$SCENE \
+        --route-glob "*" \
+        --checkpoint /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight2_bs64_2048ps_lr5e-6/latest.pth \
+        --top-k 50 \
+        --max-samples 1024 \
+        --frame-sampling 5 \
+        --batch-size 64 \
+        --num-workers 6 \
+        --device cuda:0 \
+        --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+        --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+        --output-csv /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight2_bs64_2048ps_lr5e-6/stage5init_weight2_bs64_2048ps_lr5e-6_${SCENE}.csv
+done

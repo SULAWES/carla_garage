@@ -45,7 +45,7 @@ UNCERTAINTY_THRESHOLD=0.9 # Used with direct=1, Probability of the 0 class at wh
 SLOWER=0 # Used with direct=1, Target speed will be reduced by 80% compared to the dataset. This seems to harm route completion in leaderboard 2.0 so it is turned off.
 SAVE_PATH=None # If set to system folder, this folder will be used as route to store logging and debug information.
 DEBUG_CHALLENGE=0 # 1: Generate visualization images at SAVE_PATH
-STOP_CONTROL=1 # 1: Clear stop signs detected in the object detector by setting the speed to 0 in the controller.
+STOP_CONTROL=0 # 0: sensor-only baseline; set 1 only for privileged stop sign controller ablations.
 TUNED_AIM_DISTANCE=0 # Uses a different point to follow when using the waypoint representation with DIRECT=0
 COMPILE=0 # Use torch.compile to potentially speed up the model. Has not worked well for TransFuser++ in my tests.
 STOP_AFTER_METER=-1  # Hack to get around the DS metric issue when submitting to the leaderboard test server. -1 = turned off. With positive values the car will stop after driving x meters. We have used values in 2000 for the challenge. For the local benchmarks we use the normalized driving score metric instead.

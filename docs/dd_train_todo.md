@@ -68,7 +68,9 @@
   - [x] 训练入口支持 low-speed left-turn hard-case loss weighting：`command=1 && speed<0.1 && abs(target_end_y)>4`
   - [x] 训练入口会落盘 sample distribution JSON，统计 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量
   - [x] 训练入口支持 sample manifest JSONL，缓存 route/frame、command、speed 和 trajectory target，减少每个 epoch 反复解未来 annotation
+  - [x] sample manifest 读取时校验 header 中的数据选择和 target 语义参数，避免 baseline 长训误用旧缓存
   - [x] 新增 `tools/build_diffusiondrive_manifest.py`，支持 CPU-only 作业并行预构建 train / val manifest，避免 GPU 作业等待缓存生成
+  - [x] `tools/inspect_diffusiondrive_eval_errors.py` 支持 `--sample-manifest`，eval CSV 诊断可复用训练 / 验证同一份缓存样本列表
   - [x] DataLoader worker 会限制 OpenCV / torch 内部线程，并支持 `--prefetch-factor` 与可选 `--persistent-workers`
   - [x] 远端 CPU 瓶颈优化已落到文档主线：manifest 只缓存样本元数据和 trajectory target，不缓存图像 / LiDAR；DataLoader worker 配合 `OMP_NUM_THREADS=1` 等环境变量避免在 7 CPU 核限制下过度抢线程
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema

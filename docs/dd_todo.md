@@ -45,7 +45,8 @@
   - [x] 接入基于 CARLA world stop sign actor 的运行时 stop sign controller
   - [x] 不再依赖 `sensor_agent.py` 的 bbox stop sign 检测头
   - [x] 明确当前选择 actor-based controller 是阶段性工程取舍：先保证 DD 推理链路和规则停车可运行，而不是同时迁移 garage 原模型的 stop sign bbox 检测接口
-  - [ ] 评估 actor-based controller 是否符合目标 leaderboard / sensor-only 约束；若不符合，需要迁移为 sensor-only 的 bbox / route-aware stop sign 逻辑
+  - [x] baseline-basic / sensor-only 主线默认关闭 actor-based stop sign controller；需要 privileged ablation 时显式设置 `STOP_CONTROL=1`
+  - [ ] 迁移为 sensor-only 的 bbox / route-aware stop sign 逻辑
   - [ ] 评估是否需要进一步迁移为 bbox / route-aware stop sign box 更新逻辑
 
 - [ ] **LiDAR / BEV 对齐验证与近场修复**
@@ -185,12 +186,12 @@
 
 - 好处：stop sign 规则停车与 DD 模型推理解耦，不依赖当前模型是否学会或检测到 stop sign，便于先验证基础闭环运行。
 - 风险：actor-based controller 直接读取 CARLA world actor，可能被视为 privileged 信息；如果后续目标是严格 sensor-only leaderboard 合规，需要改回基于传感器/模型输出的方案。
-- 当前实现可通过 `STOP_CONTROL` 开关独立启停，适合做 ablation 和规则合规性对比。
+- 当前实现可通过 `STOP_CONTROL` 开关独立启停，适合做 ablation 和规则合规性对比；baseline-basic / sensor-only 主线默认值是 `STOP_CONTROL=0`，只有 privileged ablation 才显式设为 `1`。
 
 **后续方向**：
 
 - 明确当前实验目标是否允许使用 CARLA world actor stop sign controller。
-- 如果只做工程闭环和模型训练前验证，可以继续保留 actor-based controller。
+- 如果只做工程闭环和模型训练前验证，可以显式设置 `STOP_CONTROL=1` 保留 actor-based controller。
 - 如果目标是严格 sensor-only leaderboard，优先迁移为 bbox / route-aware stop sign box 更新逻辑，或在 CARLA 重训时显式加入 stop sign 感知与监督。
 
 ### 3. 双 Config 设计仍然分裂

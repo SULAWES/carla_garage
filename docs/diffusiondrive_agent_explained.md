@@ -240,16 +240,15 @@ export DIFFUSIONDRIVE_DEBUG_INTERVAL=20
 
 当前只注册了一个 `rgb_front`，没有拼接多相机视角。
 
-### 6.2 缺少安全与恢复逻辑
+### 6.2 安全与恢复逻辑仍需收敛
 
-当前还没有迁入 `sensor_agent.py` 里的：
+当前已迁入 stuck / creep / safety box 等基础运行时保护。stop sign controller 保留了基于 CARLA world actor 的实现，但 baseline-basic / sensor-only 主线默认关闭：
 
-- stuck detection
-- creep / force move
-- safety box
-- stop sign controller
+```bash
+STOP_CONTROL=0
+```
 
-所以当前版本更偏“先跑通模型链路”，而不是“补齐全部运行时保护”。
+如需做 privileged 规则停车 ablation，可显式设置 `STOP_CONTROL=1`；该结果不应作为严格 sensor-only 主结果。后续若要补齐 sensor-only stop sign 能力，需要迁移 bbox / route-aware stop sign 逻辑或加入对应监督。
 
 ### 6.3 双 config 仍然并存
 

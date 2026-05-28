@@ -265,7 +265,7 @@ raw B2D Full loader 的主要 CPU / IO 压力来自反复解 `json.gz` 构造 `s
 
 manifest 当前缓存的是样本发现与 target 构造结果，格式版本为 `diffusiondrive_sample_manifest_v1`，每行包含绝对 `route_dir`、`frame`、`command`、`speed` 和 `trajectory`。它不缓存图像 tensor 或 LiDAR histogram，所以训练时仍会在线解码 `rgb/*.jpg` 和 `lidar/*.laz`；优化重点是避免每个 epoch 为了构造空间轨迹 target 重复读取大量未来 `measurements/*.json.gz`。
 
-如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会直接读取。manifest 与数据选择和 target 语义绑定，至少要按 `root-dir / route-glob / frame-sampling / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 区分命名；这些参数变化后应换一个 manifest 文件或强制重建。需要强制重建时加：
+如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会先读取 header 并校验当前 dataset 参数。校验覆盖 `target-mode / num-poses / future-stride / spatial target 参数 / frame-sampling / balanced-scenarios / max-samples-per-scenario / route-glob / root-dir / sample_count` 等字段；不匹配会直接报错，避免 baseline 长训静默使用错误分布。manifest 与数据选择和 target 语义绑定，至少要按 `root-dir / route-glob / frame-sampling / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 区分命名；这些参数变化后应换一个 manifest 文件或强制重建。需要强制重建时加：
 
 ```bash
 --rebuild-sample-manifest
@@ -339,6 +339,7 @@ python tools/build_diffusiondrive_manifest.py \
 conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
   --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
   --route-glob "*" \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
   --checkpoint ~/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth \
   --top-k 50 \
   --max-samples 1024 \
