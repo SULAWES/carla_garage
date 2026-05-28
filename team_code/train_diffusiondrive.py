@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--optimizer", choices=("adamw",), default="adamw")
+    parser.add_argument("--image-encoder-lr-mult", type=float, default=1.0)
     parser.add_argument("--scheduler", choices=("none", "cosine", "multistep"), default="none")
     parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--lr-steps", default="70")
@@ -196,6 +197,13 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
     run_config = {
         "args": make_json_safe(vars(args)),
         "diffusiondrive": make_json_safe(asdict(dd_config)),
+        "optimizer": {
+            "type": args.optimizer,
+            "lr": args.lr,
+            "weight_decay": args.weight_decay,
+            "image_encoder_lr_mult": args.image_encoder_lr_mult,
+            "image_encoder_lr": args.lr * args.image_encoder_lr_mult,
+        },
         "data": {
             "dataset_mode": args.dataset_mode,
             "train_root_dir": make_json_safe(args.root_dir),
@@ -365,7 +373,36 @@ def load_checkpoint_partial(model: torch.nn.Module, checkpoint_path: str, device
 def build_optimizer(model: torch.nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
     if args.optimizer != "adamw":
         raise RuntimeError(f"Unsupported optimizer: {args.optimizer}")
-    return torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    if args.image_encoder_lr_mult <= 0:
+        raise RuntimeError(f"--image-encoder-lr-mult must be > 0, got {args.image_encoder_lr_mult}")
+
+    image_encoder_params = []
+    other_params = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if "image_encoder" in name:
+            image_encoder_params.append(param)
+        else:
+            other_params.append(param)
+
+    if not image_encoder_params:
+        print("Warning: no parameters matched image_encoder lr multiplier.", flush=True)
+        return torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    param_groups = [
+        {"params": other_params, "lr": args.lr, "name": "default"},
+        {"params": image_encoder_params, "lr": args.lr * args.image_encoder_lr_mult, "name": "image_encoder"},
+    ]
+    print(
+        "Optimizer parameter groups: "
+        f"default={sum(param.numel() for param in other_params)} params lr={args.lr:.6g}; "
+        f"image_encoder={sum(param.numel() for param in image_encoder_params)} params "
+        f"lr={args.lr * args.image_encoder_lr_mult:.6g} "
+        f"(mult={args.image_encoder_lr_mult:.6g})",
+        flush=True,
+    )
+    return torch.optim.AdamW(param_groups, lr=args.lr, weight_decay=args.weight_decay)
 
 
 def build_scheduler(
@@ -817,8 +854,19 @@ def main() -> None:
                 hard_count = int(targets["hard_left_turn_stop"].detach().sum().cpu())
                 mean_sample_weight = float(targets["trajectory_sample_weight"].detach().mean().cpu())
                 lr = optimizer.param_groups[0]["lr"]
+                image_encoder_lr = next(
+                    (
+                        group["lr"]
+                        for group in optimizer.param_groups
+                        if group.get("name") == "image_encoder"
+                    ),
+                    None,
+                )
+                lr_text = f"lr={lr:.6g}"
+                if image_encoder_lr is not None:
+                    lr_text += f" image_encoder_lr={image_encoder_lr:.6g}"
                 print(
-                    f"epoch={epoch} step={global_step} lr={lr:.6g} loss={float(loss.detach().cpu()):.4f} "
+                    f"epoch={epoch} step={global_step} {lr_text} loss={float(loss.detach().cpu()):.4f} "
                     f"avg={avg_loss:.4f} trajectory_unweighted={float(outputs['trajectory_loss'].detach().cpu()):.4f} "
                     f"hard_left_turn_stop={hard_count}/{targets['hard_left_turn_stop'].numel()} "
                     f"mean_sample_weight={mean_sample_weight:.3f} {loss_parts}",

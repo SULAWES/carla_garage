@@ -35,3 +35,8 @@ command时序差异出自对garage sensor_agent的继承
 
 
 先用CPU缓存数据，然后再申请GPU训练。
+
+
+开环效果好不代表闭环好
+
+num_workers大一点。

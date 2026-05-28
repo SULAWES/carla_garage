@@ -24,7 +24,7 @@
 
 可配置项已经覆盖第一阶段 full training 需要的基础参数：
 
-- optimizer：`--optimizer adamw`、`--lr`、`--weight-decay`
+- optimizer：`--optimizer adamw`、`--lr`、`--weight-decay`、`--image-encoder-lr-mult`
 - scheduler：`--scheduler none|cosine|multistep`、`--warmup-steps`、`--lr-steps`、`--lr-gamma`、`--min-lr`；其中 `--lr-steps` 是按 optimizer step 计数的逗号分隔 milestone
 - loss：`--trajectory-weight`、`--trajectory-cls-weight`、`--trajectory-reg-weight`、`--trajectory-focal-alpha`、`--trajectory-focal-gamma`
 - diffusion：`--diffusion-num-train-timesteps`、`--diffusion-train-timestep-min/max`、`--diffusion-infer-step-num`、`--diffusion-infer-timestep-span`、`--diffusion-infer-trunc-timesteps`
@@ -36,6 +36,16 @@
 - dataloader / manifest：`--sample-manifest`、`--val-sample-manifest`、`--rebuild-sample-manifest`、`--prefetch-factor`、`--persistent-workers`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 - evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载
+
+## Optimizer Param Groups
+
+训练入口支持按原版 DiffusionDrive 的 optimizer 习惯给 image encoder 使用较小学习率：
+
+```bash
+--image-encoder-lr-mult 0.5
+```
+
+参数名包含 `image_encoder` 的参数会进入单独 param group，学习率为 `--lr * --image-encoder-lr-mult`；其余参数使用 `--lr`。默认值是 `1.0`，表示保持旧行为。原版对齐的 baseline-basic 建议使用 `--lr 6e-4 --weight-decay 1e-4 --image-encoder-lr-mult 0.5`；训练日志会同时打印 `lr` 和 `image_encoder_lr`，`training_config.json` 也会记录这组 optimizer 设置。
 
 ## Status Feature 与 Extra Sensors
 

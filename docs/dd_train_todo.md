@@ -61,6 +61,7 @@
 
 - [x] **第一版训练配置落盘**
   - [x] 训练入口支持 optimizer / scheduler / warmup 配置
+  - [x] 训练入口支持 `--image-encoder-lr-mult`，可按原版 DiffusionDrive 给 `image_encoder` 参数组使用 `0.5x` 学习率
   - [x] 训练入口支持 trajectory loss weights、focal alpha/gamma 和 diffusion timestep 配置
   - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
   - [x] 训练入口支持 `--eval-only`，可从训练 checkpoint 只加载 `model` 跑验证集

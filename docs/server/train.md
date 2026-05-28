@@ -665,3 +665,32 @@ for SCENE in Accident HighwayCutIn InterurbanActorFlow NonSignalizedJunctionLeft
         --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
         --output-csv /share/home/u19666033/ltr/dd_logs/full_stage6/stage5init_weight2_bs64_2048ps_lr5e-6/stage5init_weight2_bs64_2048ps_lr5e-6_${SCENE}.csv
 done
+
+
+### 全量缓存
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --output-manifest /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --num-workers 32 \
+    --rebuild \
+    --verify-load
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --route-glob "*" \
+    --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl \
+    --frame-sampling 5 \
+    --max-samples 1024 \
+    --num-workers 32 \
+    --rebuild \
+    --verify-load
