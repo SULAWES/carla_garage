@@ -262,8 +262,8 @@ DiffusionDrive 当前只负责轨迹生成，真正执行层仍是 garage 原有
 
 如果后面要继续迭代这个 agent，优先关注这几块：
 
-1. stuck detection / safety box / stop sign 等运行时保护逻辑
+1. 将 stop sign 从当前 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案
 2. 图像归一化是否需要更严格对齐训练侧
-3. 是否要利用模型的 heading / 检测 / 语义输出
+3. 是否要利用模型的检测 / 语义辅助输出；当前主轨迹仍是 XY-only，不预测 heading
 4. 是否要把 PID 控制替换成更贴合 DiffusionDrive 设定的执行器
 5. 是否要收敛成单一配置体系

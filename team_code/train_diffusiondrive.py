@@ -13,7 +13,10 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data import DataLoader, Sampler
+from torch.utils.data.distributed import DistributedSampler
 
 from config import GlobalConfig
 from diffusiondrive.carla_native_dataset import (
@@ -85,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-clip-norm", type=float, default=5.0)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--distributed", choices=("auto", "none", "ddp"), default="auto")
     parser.add_argument("--drop-last", action="store_true")
     parser.add_argument("--no-jpeg-artifact", action="store_true")
     parser.add_argument("--model-image-height", type=int, default=256)
@@ -137,6 +141,43 @@ def seed_worker(worker_id: int) -> None:
         cv2.setNumThreads(0)
     except ImportError:
         pass
+
+
+def init_distributed(args: argparse.Namespace) -> tuple[bool, int, int, int]:
+    if args.distributed == "none":
+        return False, 0, 1, 0
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if args.distributed == "auto" and world_size <= 1:
+        return False, 0, 1, 0
+    if args.distributed == "ddp" and world_size <= 1:
+        raise RuntimeError("--distributed ddp requires torchrun or WORLD_SIZE > 1")
+
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend=backend, init_method="env://")
+    return True, rank, world_size, local_rank
+
+
+def cleanup_distributed(is_distributed: bool) -> None:
+    if is_distributed and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def is_main_process(rank: int) -> bool:
+    return rank == 0
+
+
+def distributed_barrier(is_distributed: bool) -> None:
+    if is_distributed and dist.is_initialized():
+        dist.barrier()
+
+
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    return model.module if isinstance(model, DistributedDataParallel) else model
 
 
 def move_features_to_device(batch: dict, device: torch.device) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
@@ -203,6 +244,12 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "weight_decay": args.weight_decay,
             "image_encoder_lr_mult": args.image_encoder_lr_mult,
             "image_encoder_lr": args.lr * args.image_encoder_lr_mult,
+        },
+        "distributed": {
+            "mode": args.distributed,
+            "world_size": int(os.environ.get("WORLD_SIZE", "1")),
+            "rank": int(os.environ.get("RANK", "0")),
+            "local_rank": int(os.environ.get("LOCAL_RANK", "0")),
         },
         "data": {
             "dataset_mode": args.dataset_mode,
@@ -443,6 +490,16 @@ def compute_total_loss(outputs: Dict[str, torch.Tensor], dd_config: Any) -> torc
     return dd_config.trajectory_weight * outputs["trajectory_loss"]
 
 
+def zero_loss_for_ddp_outputs(outputs: Dict[str, Any]) -> torch.Tensor | float:
+    """Touch auxiliary outputs so DDP sees zero gradients for currently unsupervised heads."""
+
+    zero_loss: torch.Tensor | float = 0.0
+    for value in outputs.values():
+        if torch.is_tensor(value) and value.requires_grad:
+            zero_loss = zero_loss + value.sum() * 0.0
+    return zero_loss
+
+
 def format_scenario_sample_counts(counts: dict[str, int], limit: int = 12) -> str:
     if not counts:
         return "{}"
@@ -587,10 +644,12 @@ def build_dataloader(
     device: torch.device,
     shuffle: bool,
     drop_last: bool,
+    sampler: Optional[Sampler] = None,
 ) -> DataLoader:
     loader_kwargs = {
         "batch_size": args.batch_size,
-        "shuffle": shuffle,
+        "shuffle": shuffle if sampler is None else False,
+        "sampler": sampler,
         "num_workers": args.num_workers,
         "pin_memory": device.type == "cuda",
         "drop_last": drop_last,
@@ -648,7 +707,7 @@ def load_training_checkpoint(
     if not checkpoint_path:
         return 0, 0
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint["model"], strict=True)
+    unwrap_model(model).load_state_dict(checkpoint["model"], strict=True)
     optimizer.load_state_dict(checkpoint["optimizer"])
     if scheduler is not None and checkpoint.get("scheduler") is not None:
         scheduler.load_state_dict(checkpoint["scheduler"])
@@ -702,7 +761,7 @@ def save_checkpoint(
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"checkpoint_epoch{epoch:03d}_step{step:07d}.pth"
     payload = {
-        "model": model.state_dict(),
+        "model": unwrap_model(model).state_dict(),
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict() if scheduler is not None else None,
         "epoch": epoch,
@@ -719,11 +778,17 @@ def main() -> None:
     args = parse_args()
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    is_distributed, rank, world_size, local_rank = init_distributed(args)
     seed_everything(args.seed)
 
-    device = torch.device(args.device)
+    if is_distributed and torch.cuda.is_available():
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        device = torch.device(args.device)
     output_dir = args.logdir / args.id
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process(rank):
+        output_dir.mkdir(parents=True, exist_ok=True)
+    distributed_barrier(is_distributed)
 
     global_config = GlobalConfig()
     dd_config = build_diffusiondrive_config(
@@ -734,9 +799,14 @@ def main() -> None:
     dd_config.camera_width = args.model_image_width
     dd_config.__post_init__()
     apply_runtime_training_overrides(dd_config, args)
-    write_run_config(output_dir, args, global_config, dd_config)
+    if is_main_process(rank):
+        write_run_config(output_dir, args, global_config, dd_config)
 
     if args.eval_only:
+        if not is_main_process(rank):
+            distributed_barrier(is_distributed)
+            cleanup_distributed(is_distributed)
+            return
         eval_root_dirs = args.val_root_dir or args.root_dir
         eval_frame_sampling = args.val_frame_sampling or args.frame_sampling
         eval_max_samples = args.val_max_samples if args.val_root_dir else args.max_samples
@@ -768,6 +838,8 @@ def main() -> None:
         load_model_for_eval(model, args, device)
         metrics = evaluate(model, eval_dataloader, device, dd_config, args.max_val_steps)
         print_metrics("eval", metrics)
+        distributed_barrier(is_distributed)
+        cleanup_distributed(is_distributed)
         return
 
     dataset = build_dataset(
@@ -781,9 +853,27 @@ def main() -> None:
         enable_hard_case_weight=True,
         sample_manifest_path=args.sample_manifest,
     )
-    dataloader = build_dataloader(dataset, args, device, shuffle=True, drop_last=args.drop_last)
+    train_sampler = (
+        DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            drop_last=args.drop_last,
+        )
+        if is_distributed
+        else None
+    )
+    dataloader = build_dataloader(
+        dataset,
+        args,
+        device,
+        shuffle=True,
+        drop_last=args.drop_last,
+        sampler=train_sampler,
+    )
     val_dataloader = None
-    if args.val_root_dir:
+    if args.val_root_dir and is_main_process(rank):
         val_dataset = build_dataset(
             args.val_root_dir,
             args,
@@ -804,15 +894,24 @@ def main() -> None:
             output_dir=output_dir,
             max_samples=args.dataset_stats_max_samples,
         )
-    print(f"Dataset samples: {len(dataset)}", flush=True)
-    print(f"Dataset scenario samples: {format_scenario_sample_counts(dataset.scenario_sample_counts)}", flush=True)
-    summarize_sample_distribution(
-        dataset,
-        name="train",
-        output_dir=output_dir,
-        max_samples=args.dataset_stats_max_samples,
-    )
-    print(f"Output dir: {output_dir}", flush=True)
+    if is_main_process(rank):
+        print(f"Dataset samples: {len(dataset)}", flush=True)
+        print(f"Dataset scenario samples: {format_scenario_sample_counts(dataset.scenario_sample_counts)}", flush=True)
+        if is_distributed:
+            print(
+                f"Distributed training: world_size={world_size} rank={rank} local_rank={local_rank} "
+                f"per_rank_batch_size={args.batch_size} global_batch_size={args.batch_size * world_size} "
+                f"steps_per_epoch_per_rank={len(dataloader)}",
+                flush=True,
+            )
+        summarize_sample_distribution(
+            dataset,
+            name="train",
+            output_dir=output_dir,
+            max_samples=args.dataset_stats_max_samples,
+        )
+        print(f"Output dir: {output_dir}", flush=True)
+    distributed_barrier(is_distributed)
 
     model = V2TransfuserModel(dd_config).to(device)
     model.train()
@@ -825,14 +924,26 @@ def main() -> None:
         load_checkpoint_partial(model, args.load_file, device)
         start_epoch, global_step = 0, 0
 
+    if is_distributed:
+        model = DistributedDataParallel(
+            model,
+            device_ids=[local_rank] if device.type == "cuda" else None,
+            output_device=local_rank if device.type == "cuda" else None,
+            find_unused_parameters=True,
+        )
+
     running_loss = 0.0
     running_count = 0
     for epoch in range(start_epoch, args.epochs):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         for batch in dataloader:
             features, targets = move_features_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
             outputs = model(features, targets=targets)
             loss = compute_total_loss(outputs, dd_config)
+            if is_distributed:
+                loss = loss + zero_loss_for_ddp_outputs(outputs)
             loss.backward()
             if args.grad_clip_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip_norm)
@@ -843,7 +954,7 @@ def main() -> None:
             global_step += 1
             running_loss += float(loss.detach().cpu())
             running_count += 1
-            if global_step == 1 or global_step % args.log_every == 0:
+            if is_main_process(rank) and (global_step == 1 or global_step % args.log_every == 0):
                 avg_loss = running_loss / max(running_count, 1)
                 running_loss = 0.0
                 running_count = 0
@@ -874,20 +985,31 @@ def main() -> None:
                 )
 
             if val_dataloader is not None and args.val_every_steps > 0 and global_step % args.val_every_steps == 0:
-                metrics = evaluate(model, val_dataloader, device, dd_config, args.max_val_steps)
+                metrics = evaluate(unwrap_model(model), val_dataloader, device, dd_config, args.max_val_steps)
                 print_metrics(f"validation step={global_step}", metrics)
+            if args.val_every_steps > 0 and global_step % args.val_every_steps == 0:
+                distributed_barrier(is_distributed)
 
-            if args.save_every_steps > 0 and global_step % args.save_every_steps == 0:
+            if is_main_process(rank) and args.save_every_steps > 0 and global_step % args.save_every_steps == 0:
                 save_checkpoint(output_dir, model, optimizer, scheduler, epoch, global_step, args, dd_config)
+            if args.save_every_steps > 0 and global_step % args.save_every_steps == 0:
+                distributed_barrier(is_distributed)
 
             if args.max_steps is not None and global_step >= args.max_steps:
-                save_checkpoint(output_dir, model, optimizer, scheduler, epoch, global_step, args, dd_config)
+                if is_main_process(rank):
+                    save_checkpoint(output_dir, model, optimizer, scheduler, epoch, global_step, args, dd_config)
+                distributed_barrier(is_distributed)
+                cleanup_distributed(is_distributed)
                 return
 
-    if val_dataloader is not None and args.val_every_steps == 0:
-        metrics = evaluate(model, val_dataloader, device, dd_config, args.max_val_steps)
+    if val_dataloader is not None and args.val_every_steps == 0 and is_main_process(rank):
+        metrics = evaluate(unwrap_model(model), val_dataloader, device, dd_config, args.max_val_steps)
         print_metrics("validation final", metrics)
-    save_checkpoint(output_dir, model, optimizer, scheduler, args.epochs - 1, global_step, args, dd_config)
+    distributed_barrier(is_distributed)
+    if is_main_process(rank):
+        save_checkpoint(output_dir, model, optimizer, scheduler, args.epochs - 1, global_step, args, dd_config)
+    distributed_barrier(is_distributed)
+    cleanup_distributed(is_distributed)
 
 
 if __name__ == "__main__":

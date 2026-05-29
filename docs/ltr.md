@@ -40,3 +40,5 @@ command时序差异出自对garage sensor_agent的继承
 开环效果好不代表闭环好
 
 num_workers大一点。
+
+实验发现，7 CPU物理核心的时候num-workers设置为16有效（

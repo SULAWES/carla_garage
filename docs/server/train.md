@@ -691,6 +691,127 @@ python tools/build_diffusiondrive_manifest.py \
     --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl \
     --frame-sampling 5 \
     --max-samples 1024 \
-    --num-workers 32 \
+    --balanced-scenarios \
+    --num-workers 16 \
     --rebuild \
     --verify-load
+
+
+### full
+
+CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --val-root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir /share/home/u19666033/ltr/dd_logs/full_baseline_basic \
+    --id origlike_bs64_lr6e-4_ep100_fs5_spatial \
+    --epochs 100 \
+    --batch-size 64 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --num-workers 4 \
+    --prefetch-factor 2 \
+    --scheduler cosine \
+    --warmup-steps $WARMUP_STEPS \
+    --min-lr 1e-6 \
+    --val-every-steps $STEPS_PER_EPOCH \
+    --val-frame-sampling 5 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps $STEPS_PER_EPOCH \
+    --log-every 50 \
+    --lr 6e-4 \
+    --weight-decay 1e-4 \
+    --image-encoder-lr-mult 0.5 \
+    --grad-clip-norm 0 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file "" \
+    --hard-left-turn-stop-loss-weight 1.0 \
+    --dataset-stats-max-samples 4096 \
+    --sample-manifest $TRAIN_MANIFEST \
+    --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl \
+    2>&1 | tee /share/home/u19666033/ltr/dd_logs/full_baseline_basic/origlike_bs64_lr6e-4_ep100_fs5_spatial_train.log
+
+
+在 carla_garage 根目录运行。下面是假设你已经缓存了这两个 manifest：
+
+TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl
+VAL_MANIFEST=/share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl
+
+完整命令：
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl
+VAL_MANIFEST=/share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl
+LOGDIR=/share/home/u19666033/ltr/dd_logs/full_baseline_basic
+RUN_ID=origlike_bs64_lr6e-4_ep100_fs5_spatial_imgenc0p5
+
+mkdir -p ${LOGDIR}
+
+export TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl
+
+SAMPLES=$(python -c 'import json, os; p=os.environ["TRAIN_MANIFEST"]; print(sum(1 for l in open(p) if l.strip() and
+json.loads(l).get("type") not in ("metadata",)))')
+
+
+STEPS_PER_EPOCH=$(( (SAMPLES + 64 - 1) / 64 ))
+WARMUP_STEPS=$(( STEPS_PER_EPOCH * 3 ))
+
+
+echo samples=${SAMPLES}
+echo steps_per_epoch=${STEPS_PER_EPOCH}
+echo warmup_steps=${WARMUP_STEPS}
+
+CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --val-root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir ${LOGDIR} \
+    --id ${RUN_ID} \
+    --epochs 100 \
+    --batch-size 64 \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --num-workers 16 \
+    --prefetch-factor 2 \
+    --scheduler cosine \
+    --warmup-steps ${WARMUP_STEPS} \
+    --min-lr 1e-6 \
+    --val-every-steps ${STEPS_PER_EPOCH} \
+    --val-frame-sampling 5 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps ${STEPS_PER_EPOCH} \
+    --log-every 50 \
+    --lr 6e-4 \
+    --weight-decay 1e-4 \
+    --image-encoder-lr-mult 0.5 \
+    --grad-clip-norm 0 \
+    --device cuda:0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file "" \
+    --hard-left-turn-stop-loss-weight 1.0 \
+    --dataset-stats-max-samples 4096 \
+    --sample-manifest ${TRAIN_MANIFEST} \
+    --val-sample-manifest ${VAL_MANIFEST} \
+    2>&1 | tee ${LOGDIR}/${RUN_ID}_train.log
+
+如果你的 train manifest 构建时用了：
+
+--max-samples-per-scenario 4096
+
+那训练命令里也必须补同一行：
+
+--max-samples-per-scenario 4096 \
+
+否则 manifest header 校验会报错。

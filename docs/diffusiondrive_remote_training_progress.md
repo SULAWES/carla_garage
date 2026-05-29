@@ -249,6 +249,8 @@ l1 > 2: 107
 - `spatial_path` target 和 `99x10x2` anchor 能收敛。
 - scenario-balanced 采样有效。
 - 主要短板已经从“训练链路是否能跑”转为“复杂路口左转 / 静止后起步转向的条件建模和采样权重”。
+- Stage5 / Stage6 的 tuned hard-weight 路线在六场景 eval 上已经把平均预测误差压到较低水平，但它们使用 hard-case weighting / tuned 初始化，不适合作为论文里的 `baseline-basic`。
+- 当前论文基线主线已切换为干净的 `baseline-basic`：B2D Full scenario-balanced 全量训练、`spatial_path` target、`99x10x2` anchor、`command_one_hot(6)+speed(1)` status、sample manifest 缓存、无 hard-case weighting、无 hard-case oversampling、无持续学习方法。
 
 ## Stage3 / Stage4: Hard-Case Weighting 与 Manifest 长训
 
@@ -273,25 +275,61 @@ Stage4 主要用于验证新加入的 manifest / DataLoader CPU 优化能支撑�
 - `--prefetch-factor 2`
 - `--dataset-stats-max-samples 0`
 
-这一路线工程上能减少 target 构造带来的 CPU 压力，但当前 Stage4 中途验证 `validation step=9000 trajectory_unweighted=2.1736`，弱于 Stage3 在 step 3000 的 `1.3921`。因此 Stage4 暂时只作为“缓存优化已接入长训命令”的工程记录，不应直接当作效果最佳 checkpoint；下一步更应考虑 hard-case oversampling，而不是单纯继续扩大每场景样本数或拉长训练。
+这一路线工程上能减少 target 构造带来的 CPU 压力，但当前 Stage4 中途验证 `validation step=9000 trajectory_unweighted=2.1736`，弱于 Stage3 在 step 3000 的 `1.3921`。因此 Stage4 暂时只作为“缓存优化已接入长训命令”的工程记录，不应直接当作效果最佳 checkpoint。hard-case oversampling 仍可作为后续改进方向，但当前论文 baseline 主线先转为 full `baseline-basic`，避免把 tuned hard-case 策略混入基础 baseline。
 
-## 建议下一步
+## Baseline-Basic Full Training: Running
 
-优先级从高到低：
+当前正在远端挂全量 `baseline-basic` 训练，用于论文 baseline 和后续持续学习方法的初始化基础。这个实验刻意不使用 Stage5 / Stage6 tuned checkpoint，也不使用 hard-case weighting。
 
-1. 使用已新增的 hard-case loss weighting 做小实验：
-   - `--hard-left-turn-stop-loss-weight` 会对 `command=1 && speed<0.1 && abs(target_end_y)>4` 样本加权。
-   - 先从 Stage2 checkpoint 短训，观察 `NonSignalizedJunctionLeftTurn` 是否继续下降，以及其它场景是否受损。
-2. 优先实现 hard-case oversampling：
-   - 当前 weighting 能改善但 hard case 在 batch 中仍然稀疏，Stage4 日志里常见 `hard_left_turn_stop=0-3/64`。
-   - 建议在 dataset 层按同一 hard-case predicate 复制训练样本，validation / eval-only 保持原始分布。
-3. 使用已新增的 sample distribution JSON 确认 hard cases 是否进入训练：
-   - 脚本会落盘 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量。
-   - 用 `--dataset-stats-max-samples` 控制统计样本数；默认最多统计 `4096` 个样本。
-4. 可视化 top error 样本：
-   - raw image
-   - target trajectory
-   - predicted trajectory
-   - speed / command
-5. 再考虑扩大 `max-samples-per-scenario` 到 `512 / 1024` 做更长 balanced stage，但需要用 manifest 缓存降低 CPU 开销，并保留 NSJ eval / CSV 诊断。
-6. 进入 CARLA 闭环前，先确认远端已同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`，否则新版 agent 会因缺少 `GlobalConfig.diffusiondrive_spatial_pid*` 参数在 setup 阶段失败。然后使用默认空间 PID 做 smoke，并 A/B `DIFFUSIONDRIVE_SPATIAL_PID=0` 的旧 time-index fallback；同时可打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1`、`DIFFUSIONDRIVE_DEBUG_INTERVAL=20` 记录 command / desired speed / turn ratio / aim waypoint / control，重点观察路口低速转弯、停车起步和 emergency stop 触发。
+数据缓存：
+
+- Train manifest：`/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl`
+- 构建参数：`--root-dir /share/home/u19666033/djy/carla_dataset --route-glob "*/*" --frame-sampling 5 --balanced-scenarios`
+- 未使用 `--max-samples-per-scenario`，因此是 scenario-balanced discovery 下的全量 manifest
+- Val manifest：`/share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl`
+
+训练输出：
+
+- Logdir：`/share/home/u19666033/ltr/dd_logs/full_baseline_basic`
+- Run id：`origlike_bs64_lr6e-4_ep100_fs5_spatial_imgenc0p5`
+
+核心参数：
+
+```text
+epochs=100
+batch_size=64
+lr=6e-4
+weight_decay=1e-4
+optimizer=AdamW
+scheduler=cosine
+min_lr=1e-6
+warmup_steps=3 * steps_per_epoch
+image_encoder_lr_mult=0.5
+grad_clip_norm=0
+num_workers=4
+prefetch_factor=2
+hard_left_turn_stop_loss_weight=1.0
+load_file=""
+```
+
+与原版 DiffusionDrive 对齐情况：
+
+- 已对齐：`max_epochs=100`、`batch_size=64`、`AdamW`、`lr=6e-4`、`weight_decay=1e-4`、`min_lr=1e-6`、`warmup_epochs=3` 的等价 step warmup、`image_encoder` 使用 `0.5x` 学习率。
+- 尚未对齐：AMP / `16-mixed`、DDP、多卡 global batch、原版 Lightning 训练框架。
+
+当前应重点观察：
+
+- warmup 前 3 个 epoch 内 loss 是否平稳下降，不要过早按前几个 step 判断。
+- `lr` 与 `image_encoder_lr` 是否分别打印为约 `6e-4` 与 `3e-4`。
+- `trajectory_unweighted` 与 validation loss 在 warmup 后是否继续下降。
+- GPU 利用率是否仍周期性掉低，CPU / 内存是否出现单调增长到 OOM。
+- 若 `lr=6e-4` 出现明显 loss 爆炸或 NaN，下一版保留 `epochs=100` 和 `image_encoder_lr_mult=0.5`，优先回退到 `lr=1e-4` 做保守 baseline。
+
+## 后续建议
+
+当前先等待 full baseline-basic 的训练曲线和 checkpoint。拿到结果后按同一六场景 eval CSV 汇总平均 `l1 / ade / fde`，再决定：
+
+1. 是否保留原版对齐版作为论文 baseline-basic。
+2. 是否需要再跑一个 `lr=1e-4` 的保守 baseline-basic 对照。
+3. Stage5 / Stage6 tuned hard-weight 路线只作为改进 / ablation 参考，不和 baseline-basic 混用。
+4. 进入 CARLA 闭环前，确认使用 sensor-only 设置，尤其 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。

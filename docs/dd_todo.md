@@ -348,11 +348,11 @@
 
 ## 建议的推进顺序
 
-1. 补 stuck detection / creep / safety box
-2. 视需要补 stop sign controller
-3. 验证 LiDAR 坐标系与 BEV 对齐
-4. 核对图像预处理与训练设置
-5. 再考虑是否利用辅助头或做 ensemble
+1. 等待 full baseline-basic 训练结果，并按固定六场景 CSV 汇总预测误差
+2. 进入闭环前固定 sensor-only 运行协议，尤其默认 `STOP_CONTROL=0`
+3. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案
+4. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap
+5. 再考虑是否利用辅助头、改控制器或做 ensemble
 
 ---
 

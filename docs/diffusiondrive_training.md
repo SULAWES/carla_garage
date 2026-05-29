@@ -31,6 +31,7 @@
 - data split：`--val-root-dir`、`--val-route-glob`、`--val-frame-sampling`、`--val-max-samples`、`--val-every-steps`、`--max-val-steps`
 - dataset / target / time contract：`--dataset-mode`、`--target-mode`、`--spatial-target-first-distance`、`--spatial-target-interval`、`--spatial-target-max-future-frames`、`--assumed-frame-interval`、`--future-stride`、`--b2d-source-image-height`、`--b2d-source-image-width`
 - scenario balancing：`--balanced-scenarios`、`--max-samples-per-scenario`
+- distributed：`--distributed auto|none|ddp`，默认 `auto`，用 `torchrun` 启动且 `WORLD_SIZE>1` 时自动启用 DDP
 - hard-case weighting：`--hard-left-turn-stop-loss-weight`、`--hard-left-turn-command`、`--hard-left-turn-speed-threshold`、`--hard-left-turn-y-threshold`
 - sample distribution stats：`--dataset-stats-max-samples` 会落盘 `train_sample_distribution.json` / `validation_sample_distribution.json` / `eval_sample_distribution.json`
 - dataloader / manifest：`--sample-manifest`、`--val-sample-manifest`、`--rebuild-sample-manifest`、`--prefetch-factor`、`--persistent-workers`
@@ -46,6 +47,36 @@
 ```
 
 参数名包含 `image_encoder` 的参数会进入单独 param group，学习率为 `--lr * --image-encoder-lr-mult`；其余参数使用 `--lr`。默认值是 `1.0`，表示保持旧行为。原版对齐的 baseline-basic 建议使用 `--lr 6e-4 --weight-decay 1e-4 --image-encoder-lr-mult 0.5`；训练日志会同时打印 `lr` 和 `image_encoder_lr`，`training_config.json` 也会记录这组 optimizer 设置。
+
+## Multi-GPU DDP
+
+训练入口支持 PyTorch DDP。单卡命令保持不变；多卡用 `torchrun` 启动，脚本会从 `LOCAL_RANK / RANK / WORLD_SIZE` 自动设置设备、初始化 process group，并给训练集使用 `DistributedSampler`：
+
+```bash
+torchrun --standalone --nproc_per_node=4 team_code/train_diffusiondrive.py ...
+```
+
+DDP 下 `--batch-size` 是每张 GPU / 每个进程的 batch size，实际 global batch size 为 `batch_size * WORLD_SIZE`。scheduler、`--warmup-steps`、`--val-every-steps`、`--save-every-steps` 都按 optimizer step 计数；由于 DDP 每个 epoch 的 optimizer step 数约为 `ceil(samples / global_batch_size)`，计算 warmup 和保存间隔时要用 global batch size。rank0 负责写 `training_config.json`、sample distribution、validation 和 checkpoint；checkpoint 保存的是未包 DDP 的普通 model state dict，后续单卡或多卡都可以 resume。当前 DDP 使用 `find_unused_parameters=True`，并在 DDP 模式下对 auxiliary outputs 加 `0.0 * output.sum()` dummy term，使未监督 heads 产生零梯度；这不改变数值 loss，只是避免 trajectory-only baseline 下的 DDP unused-branch 问题。
+
+## Current Baseline-Basic Run
+
+当前远端正在训练 full `baseline-basic`，目标是作为论文 baseline 和后续持续学习方法的干净起点。该实验使用 B2D Full scenario-balanced 全量 train manifest，不使用 Stage5 / Stage6 tuned checkpoint，不启用 hard-case weighting：
+
+```text
+logdir=/share/home/u19666033/ltr/dd_logs/full_baseline_basic
+id=origlike_bs64_lr6e-4_ep100_fs5_spatial_imgenc0p5
+train_manifest=/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl
+val_manifest=/share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl
+epochs=100
+batch_size=64
+lr=6e-4
+weight_decay=1e-4
+image_encoder_lr_mult=0.5
+hard_left_turn_stop_loss_weight=1.0
+load_file=""
+```
+
+这个 run 已尽量对齐原版 DiffusionDrive 的主要训练预算和优化器设置；当前训练入口已支持 DDP，但尚未对齐 AMP。训练结果和中途诊断记录在 `diffusiondrive_remote_training_progress.md`。
 
 ## Status Feature 与 Extra Sensors
 

@@ -2,11 +2,12 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-05-21
+**更新日期**: 2026-05-29
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
 - 因此训练侧优先级高于继续对齐 navsim checkpoint 语义
+- 当前正在远端训练 full `baseline-basic`：B2D Full scenario-balanced 全量 manifest、`epochs=100`、`batch_size=64`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -62,6 +63,7 @@
 - [x] **第一版训练配置落盘**
   - [x] 训练入口支持 optimizer / scheduler / warmup 配置
   - [x] 训练入口支持 `--image-encoder-lr-mult`，可按原版 DiffusionDrive 给 `image_encoder` 参数组使用 `0.5x` 学习率
+  - [x] 训练入口支持 `torchrun` / DDP 多卡训练，训练集使用 `DistributedSampler`，rank0 负责 validation / checkpoint / 配置落盘
   - [x] 训练入口支持 trajectory loss weights、focal alpha/gamma 和 diffusion timestep 配置
   - [x] 训练入口支持 validation split 参数、checkpoint resume 和 `latest.pth`
   - [x] 训练入口支持 `--eval-only`，可从训练 checkpoint 只加载 `model` 跑验证集
@@ -76,6 +78,7 @@
   - [x] 远端 CPU 瓶颈优化已落到文档主线：manifest 只缓存样本元数据和 trajectory target，不缓存图像 / LiDAR；DataLoader worker 配合 `OMP_NUM_THREADS=1` 等环境变量避免在 7 CPU 核限制下过度抢线程
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
+  - [x] 已启动 full baseline-basic 训练，作为论文 baseline 和后续持续学习工作的干净基础；Stage5 / Stage6 tuned hard-weight checkpoint 只作为 ablation / 改进参考
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
 
 ### P1 级别（直接影响训练效果）
@@ -113,9 +116,10 @@
 
 - [ ] **loss / optimization 定标**
   - [x] 增加针对 `NonSignalizedJunctionLeftTurn` 已知高误差模式的可选样本级 loss weighting，默认关闭，validation / eval-only 保持未加权
+  - [x] full baseline-basic 原版对齐实验使用 `image_encoder_lr_mult=0.5`，避免 `lr=6e-4` 直接作用到全部 image encoder 参数
   - [ ] 99 modes 下重新评估 focal alpha/gamma、`trajectory_cls_weight`、`trajectory_reg_weight`
   - [ ] 评估外层 `trajectory_weight` 接入后总梯度尺度，记录 grad norm 和 loss breakdown
-  - [ ] 明确 image encoder 是否使用更小 LR / freeze BN / freeze backbone warmup
+  - [x] 明确 image encoder 采用更小 LR；freeze BN / freeze backbone warmup 暂不启用
   - [ ] 小 batch 训练前确认 BatchNorm 策略：frozen BN、SyncBN、或足够大的 effective batch
 
 ### P2 级别（训练后闭环增强）
