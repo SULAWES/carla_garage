@@ -161,3 +161,101 @@ done > /share/home/u19666033/ltr/dd_logs/mem_logs/mem_watch.log 2>&1 &
   然后正常跑训练。过程中单窗口查看：
 
   tail -f /share/home/u19666033/ltr/dd_logs/mem_logs/mem_watch.log
+
+[rank1]:[W530 03:25:32.367738829 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 1]  using GPU 1 to perform barrier as devices used by th
+is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier()
+ to force use of a particular device,or call init_process_group() with a device_id.                                                         
+[rank3]:[W530 03:25:32.367820736 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 3]  using GPU 3 to perform barrier as devices used by th
+is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier()
+ to force use of a particular device,or call init_process_group() with a device_id.                                                         
+[rank0]:[W530 03:25:32.367841590 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 0]  using GPU 0 to perform barrier as devices used by th
+is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier()
+ to force use of a particular device,or call init_process_group() with a device_id.                                                         
+[rank2]:[W530 03:25:32.367861782 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 2]  using GPU 2 to perform barrier as devices used by th
+is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier()
+ to force use of a particular device,or call init_process_group() with a device_id.                                                         
+Wrote run config: /share/home/u19666033/ltr/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/training_config.json                                                                                                                                    
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                 
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                 
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                 
+/share/home/u19666033/.conda/envs/ltr_garage_2/lib/python3.10/site-packages/torch/utils/data/dataloader.py:617: UserWarning: This DataLoader
+ will create 32 worker processes in total. Our suggested max number of worker in current system is 24, which is smaller than what this DataL
+oader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker 
+number to avoid potential slowness/freeze if necessary.                                                                                     
+  warnings.warn(                                                                                                                            
+/share/home/u19666033/.conda/envs/ltr_garage_2/lib/python3.10/site-packages/torch/utils/data/dataloader.py:617: UserWarning: This DataLoader
+ will create 32 worker processes in total. Our suggested max number of worker in current system is 24, which is smaller than what this DataL
+oader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker 
+number to avoid potential slowness/freeze if necessary.                                                                                     
+  warnings.warn(                                                                                                                            
+/share/home/u19666033/.conda/envs/ltr_garage_2/lib/python3.10/site-packages/torch/utils/data/dataloader.py:617: UserWarning: This DataLoader will create 32 worker processes in total. Our suggested max number of worker in current system is 24, which is smaller than what this Data$oader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker
+number to avoid potential slowness/freeze if necessary.
+  warnings.warn(
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl (1024 samples)                              
+Validation samples: 1024
+Validation scenario samples: NonSignalizedJunctionLeftTurn=1024
+validation distribution: sampled=1024/1024 hard_left_turn_stop=137 fraction=0.1338 file=/share/home/u19666033/ltr/dd_logs/full_baseline_bas$c/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/validation_sample_distribution.json                                              
+Dataset samples: 140348
+Dataset scenario samples: Accident=2101, AccidentTwoWays=2845, BlockedIntersection=2012, ConstructionObstacle=2039, ConstructionObstacleTwo$ays=2592, ControlLoss=7067, CrossingBicycleFlow=932, DynamicObjectCrossing=7636, EnterActorFlow=2543, EnterActorFlowV2=1384, HardBreakRoute$2624, HazardAtSideLane=4695, ... (+27 more)
+
+Distributed training: world_size=4 rank=0 local_rank=0 per_rank_batch_size=64 global_batch_size=256 steps_per_epoch_per_rank=549
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)
+/share/home/u19666033/.conda/envs/ltr_garage_2/lib/python3.10/site-packages/torch/utils/data/dataloader.py:617: UserWarning: This DataLoader will create 32 worker processes in total. Our suggested max number of worker in current system is 24, which is smaller than what this DataLoader is going to create. Please be aware that excessive worker creation might get DataLoader running slow or even freeze, lower the worker number to avoid potential slowness/freeze if necessary.
+  warnings.warn(
+train distribution: sampled=4096/140348 hard_left_turn_stop=24 fraction=0.0059 file=/share/home/u19666033/ltr/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/train_sample_distribution.json
+Output dir: /share/home/u19666033/ltr/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+[rank1]:[W530 03:26:09.639680012 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find any unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adversely affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that this warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+[rank3]:[W530 03:26:09.656028693 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find any unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adversely affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that this warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+[rank2]:[W530 03:26:09.698043934 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find any unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adversely affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that this warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+[rank0]:[W530 03:26:09.708221289 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find any unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adversely affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that this warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+epoch=0 step=1 lr=7.28597e-07 image_encoder_lr=3.64299e-07 loss=218.1111 avg=218.1111 trajectory_unweighted=18.1759 hard_left_turn_stop=1/64 mean_sample_weight=1.000 trajectory_loss_0=9.0601, trajectory_loss_1=9.1158
+
+
+---
+
+
+[rank0]:[W530 03:34:00.757485201 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 0]  using GPU 0 to perform barrier as devices use[4/281]
+is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier()
+ to force use of a particular device,or call init_process_group() with a device_id.                                                         
+[rank2]:[W530 03:34:00.762935085 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 2]  using GPU 2 to perform barrier as devices used by t$
+is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier($ to force use of a particular device,or call init_process_group() with a device_id.                                                        
+[rank3]:[W530 03:34:00.767438250 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 3]  using GPU 3 to perform barrier as devices used by t$is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier($ to force use of a particular device,or call init_process_group() with a device_id.                                                        
+[rank1]:[W530 03:34:00.768567631 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 1]  using GPU 1 to perform barrier as devices used by t$is process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier($ to force use of a particular device,or call init_process_group() with a device_id.                                                        
+Wrote run config: /share/home/u19666033/ltr/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/training_co$fig.json
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl (1024 samples)                              
+Validation samples: 1024
+Validation scenario samples: NonSignalizedJunctionLeftTurn=1024
+validation distribution: sampled=1024/1024 hard_left_turn_stop=137 fraction=0.1338 file=/share/home/u19666033/ltr/dd_logs/full_baseline_bas$c/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/validation_sample_distribution.json                                              
+Dataset samples: 140348
+Dataset scenario samples: Accident=2101, AccidentTwoWays=2845, BlockedIntersection=2012, ConstructionObstacle=2039, ConstructionObstacleTwo$ays=2592, ControlLoss=7067, CrossingBicycleFlow=932, DynamicObjectCrossing=7636, EnterActorFlow=2543, EnterActorFlowV2=1384, HardBreakRoute$2624, HazardAtSideLane=4695, ... (+27 more)
+Distributed training: world_size=4 rank=0 local_rank=0 per_rank_batch_size=64 global_batch_size=256 steps_per_epoch_per_rank=549           
+Loaded sample manifest: /share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl (140348 samples)                
+train distribution: sampled=4096/140348 hard_left_turn_stop=24 fraction=0.0059 file=/share/home/u19666033/ltr/dd_logs/full_baseline_basic/o$iglike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/train_sample_distribution.json                                                       
+Output dir: /share/home/u19666033/ltr/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+Optimizer parameter groups: default=39462219 params lr=0.0006; image_encoder=21284672 params lr=0.0003 (mult=0.5)
+[rank1]:[W530 03:34:16.281730973 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find $
+ny unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adverse$
+y affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that t$
+is warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+[rank0]:[W530 03:34:16.282066005 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find $
+ny unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adverse$
+y affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that t$
+is warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+[rank3]:[W530 03:34:16.283609834 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find $
+ny unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adverse$
+y affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that t$
+is warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())
+[rank2]:[W530 03:34:16.284400406 reducer.cpp:1400] Warning: find_unused_parameters=True was specified in DDP constructor, but did not find $
+ny unused parameters in the forward pass. This flag results in an extra traversal of the autograd graph every iteration,  which can adverse$
+y affect performance. If your model indeed never has any unused parameters in the forward pass, consider turning this flag off. Note that t$
+is warning may be a false positive if your model has flow control causing later iterations to have unused parameters. (function operator())

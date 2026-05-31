@@ -277,9 +277,9 @@ Stage4 主要用于验证新加入的 manifest / DataLoader CPU 优化能支撑�
 
 这一路线工程上能减少 target 构造带来的 CPU 压力，但当前 Stage4 中途验证 `validation step=9000 trajectory_unweighted=2.1736`，弱于 Stage3 在 step 3000 的 `1.3921`。因此 Stage4 暂时只作为“缓存优化已接入长训命令”的工程记录，不应直接当作效果最佳 checkpoint。hard-case oversampling 仍可作为后续改进方向，但当前论文 baseline 主线先转为 full `baseline-basic`，避免把 tuned hard-case 策略混入基础 baseline。
 
-## Baseline-Basic Full Training: Running
+## Baseline-Basic Full Training: Completed
 
-当前正在远端挂全量 `baseline-basic` 训练，用于论文 baseline 和后续持续学习方法的初始化基础。这个实验刻意不使用 Stage5 / Stage6 tuned checkpoint，也不使用 hard-case weighting。
+全量 `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练，用于论文 baseline 和后续持续学习方法的初始化基础。这个实验刻意不使用 Stage5 / Stage6 tuned checkpoint，也不使用 hard-case weighting。
 
 数据缓存：
 
@@ -291,13 +291,14 @@ Stage4 主要用于验证新加入的 manifest / DataLoader CPU 优化能支撑�
 训练输出：
 
 - Logdir：`/share/home/u19666033/ltr/dd_logs/full_baseline_basic`
-- Run id：`origlike_bs64_lr6e-4_ep100_fs5_spatial_imgenc0p5`
+- Run id：`origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5`
 
 核心参数：
 
 ```text
 epochs=100
-batch_size=64
+batch_size=64 per GPU
+global_batch_size=256
 lr=6e-4
 weight_decay=1e-4
 optimizer=AdamW
@@ -310,26 +311,22 @@ num_workers=4
 prefetch_factor=2
 hard_left_turn_stop_loss_weight=1.0
 load_file=""
+hardware=4x L40
+distributed=torchrun/DDP
 ```
 
 与原版 DiffusionDrive 对齐情况：
 
-- 已对齐：`max_epochs=100`、`batch_size=64`、`AdamW`、`lr=6e-4`、`weight_decay=1e-4`、`min_lr=1e-6`、`warmup_epochs=3` 的等价 step warmup、`image_encoder` 使用 `0.5x` 学习率。
-- 尚未对齐：AMP / `16-mixed`、DDP、多卡 global batch、原版 Lightning 训练框架。
+- 已对齐：`max_epochs=100`、per-GPU `batch_size=64`、`AdamW`、`lr=6e-4`、`weight_decay=1e-4`、`min_lr=1e-6`、`warmup_epochs=3` 的等价 step warmup、`image_encoder` 使用 `0.5x` 学习率。
+- 已启用：`torchrun` / DDP 4 卡训练。DDP 下 `--batch-size` 是 per-GPU batch，global batch 为 `batch_size * WORLD_SIZE`，本 run global batch 为 `256`。
+- 尚未对齐：AMP / `16-mixed`、原版 Lightning 训练框架。
 
-当前应重点观察：
+## Post-Training Evaluation Status
 
-- warmup 前 3 个 epoch 内 loss 是否平稳下降，不要过早按前几个 step 判断。
-- `lr` 与 `image_encoder_lr` 是否分别打印为约 `6e-4` 与 `3e-4`。
-- `trajectory_unweighted` 与 validation loss 在 warmup 后是否继续下降。
-- GPU 利用率是否仍周期性掉低，CPU / 内存是否出现单调增长到 OOM。
-- 若 `lr=6e-4` 出现明显 loss 爆炸或 NaN，下一版保留 `epochs=100` 和 `image_encoder_lr_mult=0.5`，优先回退到 `lr=1e-4` 做保守 baseline。
+baseline-basic 训练完成后，当前重点转为开环汇总和 CARLA / Bench2Drive 闭环评测：
 
-## 后续建议
-
-当前先等待 full baseline-basic 的训练曲线和 checkpoint。拿到结果后按同一六场景 eval CSV 汇总平均 `l1 / ade / fde`，再决定：
-
-1. 是否保留原版对齐版作为论文 baseline-basic。
-2. 是否需要再跑一个 `lr=1e-4` 的保守 baseline-basic 对照。
-3. Stage5 / Stage6 tuned hard-weight 路线只作为改进 / ablation 参考，不和 baseline-basic 混用。
-4. 进入 CARLA 闭环前，确认使用 sensor-only 设置，尤其 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。
+1. 按固定六场景与 full scenarios CSV 汇总平均 `l1 / ade / fde`，作为论文 baseline-basic 的开环诊断。
+2. 闭环评测使用 sensor-only 协议，默认 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。
+3. 闭环长跑已开始，`bench2drive_00` 到 `bench2drive_11` 曾正常产出 route stats；后续遇到 CARLA/UE4 render thread crash 和 agent setup CUDA OOM，需要按基础设施问题处理，不应混入模型效果判断。
+4. 闭环结果 skip 逻辑不能只看 `status=Failed`。正常完成但驾驶失败的 route 也可能是 `Failed`，应以 `_checkpoint.progress`、records 是否存在、以及是否属于 `Failed - Agent couldn't be set up` / `Failed - Simulation crashed` / `Failed - Agent crashed` 等可重跑状态判断。
+5. Stage5 / Stage6 tuned hard-weight 路线只作为改进 / ablation 参考，不和 baseline-basic 混用。

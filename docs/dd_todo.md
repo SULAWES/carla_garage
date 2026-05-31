@@ -190,9 +190,9 @@
 
 **后续方向**：
 
-- 明确当前实验目标是否允许使用 CARLA world actor stop sign controller。
-- 如果只做工程闭环和模型训练前验证，可以显式设置 `STOP_CONTROL=1` 保留 actor-based controller。
-- 如果目标是严格 sensor-only leaderboard，优先迁移为 bbox / route-aware stop sign box 更新逻辑，或在 CARLA 重训时显式加入 stop sign 感知与监督。
+- baseline-basic / sensor-only 结果默认不允许使用 CARLA world actor stop sign controller。
+- 如果只做 privileged 规则停车 ablation，可以显式设置 `STOP_CONTROL=1` 保留 actor-based controller，并在结果中单独标注。
+- 如果目标是严格 sensor-only leaderboard，优先迁移为 bbox / route-aware stop sign box 更新逻辑，或在后续 CARLA 训练中显式加入 stop sign 感知与监督。
 
 ### 3. 双 Config 设计仍然分裂
 
@@ -348,8 +348,8 @@
 
 ## 建议的推进顺序
 
-1. 等待 full baseline-basic 训练结果，并按固定六场景 CSV 汇总预测误差
-2. 进入闭环前固定 sensor-only 运行协议，尤其默认 `STOP_CONTROL=0`
+1. 汇总已完成 full baseline-basic 的固定六场景 / full scenarios 开环 CSV 预测误差
+2. 继续推进 baseline-basic 的 sensor-only 闭环评测，默认 `STOP_CONTROL=0`
 3. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案
 4. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap
 5. 再考虑是否利用辅助头、改控制器或做 ensemble

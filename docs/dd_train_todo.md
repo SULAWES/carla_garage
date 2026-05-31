@@ -2,12 +2,12 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-05-29
+**更新日期**: 2026-05-31
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
 - 因此训练侧优先级高于继续对齐 navsim checkpoint 语义
-- 当前正在远端训练 full `baseline-basic`：B2D Full scenario-balanced 全量 manifest、`epochs=100`、`batch_size=64`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
+- full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -78,7 +78,7 @@
   - [x] 远端 CPU 瓶颈优化已落到文档主线：manifest 只缓存样本元数据和 trajectory target，不缓存图像 / LiDAR；DataLoader worker 配合 `OMP_NUM_THREADS=1` 等环境变量避免在 7 CPU 核限制下过度抢线程
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
-  - [x] 已启动 full baseline-basic 训练，作为论文 baseline 和后续持续学习工作的干净基础；Stage5 / Stage6 tuned hard-weight checkpoint 只作为 ablation / 改进参考
+  - [x] 已完成 full baseline-basic 训练，作为论文 baseline 和后续持续学习工作的干净基础；Stage5 / Stage6 tuned hard-weight checkpoint 只作为 ablation / 改进参考
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
 
 ### P1 级别（直接影响训练效果）
@@ -135,7 +135,8 @@
 
 - [ ] **训练工程可复现性**
   - [ ] `--resume-file` 当前只从 checkpoint 的下一个 epoch 继续，不恢复 dataloader epoch 内位置；长训前决定是否需要精确断点恢复
-  - [ ] 明确 full training 的 AMP / DDP / gradient accumulation 策略
+  - [x] 明确 DDP 策略：用 `torchrun` 自动启用，训练集 `DistributedSampler`，rank0 负责 validation / checkpoint；checkpoint 保存普通非 `module.` state dict
+  - [ ] 明确 full training 的 AMP / gradient accumulation 策略
   - [ ] 给 full 数据 smoke 增加吞吐量、显存、grad norm、target 分布统计
 
 - [ ] **闭环调参与可观测性**

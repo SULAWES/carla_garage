@@ -58,17 +58,18 @@ torchrun --standalone --nproc_per_node=4 team_code/train_diffusiondrive.py ...
 
 DDP 下 `--batch-size` 是每张 GPU / 每个进程的 batch size，实际 global batch size 为 `batch_size * WORLD_SIZE`。scheduler、`--warmup-steps`、`--val-every-steps`、`--save-every-steps` 都按 optimizer step 计数；由于 DDP 每个 epoch 的 optimizer step 数约为 `ceil(samples / global_batch_size)`，计算 warmup 和保存间隔时要用 global batch size。rank0 负责写 `training_config.json`、sample distribution、validation 和 checkpoint；checkpoint 保存的是未包 DDP 的普通 model state dict，后续单卡或多卡都可以 resume。当前 DDP 使用 `find_unused_parameters=True`，并在 DDP 模式下对 auxiliary outputs 加 `0.0 * output.sum()` dummy term，使未监督 heads 产生零梯度；这不改变数值 loss，只是避免 trajectory-only baseline 下的 DDP unused-branch 问题。
 
-## Current Baseline-Basic Run
+## Completed Baseline-Basic Run
 
-当前远端正在训练 full `baseline-basic`，目标是作为论文 baseline 和后续持续学习方法的干净起点。该实验使用 B2D Full scenario-balanced 全量 train manifest，不使用 Stage5 / Stage6 tuned checkpoint，不启用 hard-case weighting：
+full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练，目标是作为论文 baseline 和后续持续学习方法的干净起点。该实验使用 B2D Full scenario-balanced 全量 train manifest，不使用 Stage5 / Stage6 tuned checkpoint，不启用 hard-case weighting：
 
 ```text
 logdir=/share/home/u19666033/ltr/dd_logs/full_baseline_basic
-id=origlike_bs64_lr6e-4_ep100_fs5_spatial_imgenc0p5
+id=origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5
 train_manifest=/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl
 val_manifest=/share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl
 epochs=100
-batch_size=64
+batch_size=64 per GPU
+global_batch_size=256
 lr=6e-4
 weight_decay=1e-4
 image_encoder_lr_mult=0.5
@@ -76,7 +77,7 @@ hard_left_turn_stop_loss_weight=1.0
 load_file=""
 ```
 
-这个 run 已尽量对齐原版 DiffusionDrive 的主要训练预算和优化器设置；当前训练入口已支持 DDP，但尚未对齐 AMP。训练结果和中途诊断记录在 `diffusiondrive_remote_training_progress.md`。
+这个 run 已尽量对齐原版 DiffusionDrive 的主要训练预算和优化器设置，并使用 `torchrun` / DDP 跑完；当前训练入口尚未对齐 AMP。训练结果、开环诊断和闭环进展记录在 `diffusiondrive_remote_training_progress.md`。
 
 ## Status Feature 与 Extra Sensors
 
@@ -405,7 +406,7 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
 - 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、control、stuck / force_move / stop sign。
 - 远端闭环 A/B 前必须同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`；新版 agent 依赖 `GlobalConfig.diffusiondrive_spatial_pid*` 默认参数。
-- 暂不支持 distributed / AMP / EMA。
+- 已支持 `torchrun` / DDP 多卡训练；暂不支持 AMP / EMA。
 - 暂不训练 auxiliary heads。
 - `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。
 - `status_feature` 已迁移到 `command_one_hot(6) + speed(1)` 的 `7` 维 schema；speed 暂不归一化。

@@ -815,3 +815,93 @@ CUDA_VISIBLE_DEVICES=0 python team_code/train_diffusiondrive.py \
 --max-samples-per-scenario 4096 \
 
 否则 manifest header 校验会报错。
+
+
+### 4GPU
+
+可以。下面按 4 卡 DDP、原版对齐方向 写：batch-size=64 是每卡 batch，所以 global batch 是 64 * 4 = 256。
+
+先申请资源时建议：
+
+srun -p L40 -J dd_baseline_basic_4gpu -N 1 -n 1 \
+    --gres=gpu:l40:4 \
+    --cpus-per-task=28 \
+    --mem=256G \
+    --pty /bin/bash
+
+进入作业后，在 carla_garage 目录运行完整训练命令：
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+export TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_baseline_basic_train_all_fs5_spatial.jsonl
+export VAL_MANIFEST=/share/home/u19666033/ltr/dd_cache/nsj_left_val_1024_fs5_spatial.jsonl
+export LOGDIR=/share/home/u19666033/ltr/dd_logs/full_baseline_basic
+export RUN_ID=origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5
+export NPROC_PER_NODE=4
+export PER_GPU_BATCH=64
+export GLOBAL_BATCH=$(( PER_GPU_BATCH * NPROC_PER_NODE ))
+
+mkdir -p ${LOGDIR}
+
+SAMPLES=$(python -c 'import json, os; p=os.environ["TRAIN_MANIFEST"]; print(sum(1 for l in open(p) if l.strip() and
+json.loads(l).get("type") not in ("metadata",)))')
+STEPS_PER_EPOCH=$(( (SAMPLES + GLOBAL_BATCH - 1) / GLOBAL_BATCH ))
+WARMUP_STEPS=$(( STEPS_PER_EPOCH * 3 ))
+
+echo samples=${SAMPLES}
+echo global_batch=${GLOBAL_BATCH}
+echo steps_per_epoch=${STEPS_PER_EPOCH}
+echo warmup_steps=${WARMUP_STEPS}
+
+torchrun --standalone --nproc_per_node=${NPROC_PER_NODE} \
+team_code/train_diffusiondrive.py \
+    --distributed ddp \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --val-root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir ${LOGDIR} \
+    --id ${RUN_ID} \
+    --epochs 100 \
+    --batch-size ${PER_GPU_BATCH} \
+    --frame-sampling 5 \
+    --balanced-scenarios \
+    --num-workers 12 \
+    --prefetch-factor 2 \
+    --scheduler cosine \
+    --warmup-steps ${WARMUP_STEPS} \
+    --min-lr 1e-6 \
+    --val-every-steps ${STEPS_PER_EPOCH} \
+    --val-frame-sampling 5 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps ${STEPS_PER_EPOCH} \
+    --log-every 50 \
+    --lr 6e-4 \
+    --weight-decay 1e-4 \
+    --image-encoder-lr-mult 0.5 \
+    --grad-clip-norm 0 \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file "" \
+    --hard-left-turn-stop-loss-weight 1.0 \
+    --dataset-stats-max-samples 4096 \
+    --sample-manifest ${TRAIN_MANIFEST} \
+    --val-sample-manifest ${VAL_MANIFEST} \
+    2>&1 | tee ${LOGDIR}/${RUN_ID}_train.log
+
+关键点：
+
+- --batch-size 64 是每卡 batch，不是 global batch。
+- STEPS_PER_EPOCH 要按 SAMPLES / (64 * 4) 算。
+- --num-workers 4 也是每个 DDP 进程 4 个 worker，总共约 16 个 worker，配 28 CPU 核比较稳。
+- 如果想保持 global batch 仍为 64，而不是 256，把：
+
+export PER_GPU_BATCH=16
+但更接近原版 DDP 训练习惯的是每卡 64。
+
+

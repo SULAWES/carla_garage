@@ -11,11 +11,23 @@ srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --pty /bin
 
 srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
 
-srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=102g --pty /bin/bash
+srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
 
 srun -p L40 -J ltr_train -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=512g --pty /bin/bash
 
 srun -p L40 -J ltr_train -w gpu4008 -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
+
+srun -p L40 \
+     -J ltr_train_4 \
+     -N 1 \
+     -n 1 \
+     --gres=gpu:l40:4 \
+     --cpus-per-task=24 \
+     --mem=512G \
+     --pty /bin/bash
+
+srun -p L40 -J ltr_eval -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
+
 
 srun -p amd -J ltr_cpu -N 1 -n 1 --cpus-per-task=16 --pty /bin/bash
 srun -p amd -J ltr_cpu -N 1 -n 1 --cpus-per-task=32 --pty /bin/bash
