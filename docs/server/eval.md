@@ -862,7 +862,7 @@ carla_garage/tools/run_baseline_basic_closed_loop.sh
 在作业节点单窗口里这样跑：
 
 cd /share/home/u19666033/ltr/carla_garage
-START_IDX=15 END_IDX=219 MAX_ATTEMPTS=2 bash tools/run_baseline_basic_closed_loop.sh
+START_IDX=15 END_IDX=219 MAX_ATTEMPTS=5 bash tools/run_baseline_basic_closed_loop.sh
 
 默认会使用当前 baseline-basic：
 
@@ -873,3 +873,45 @@ DIFFUSIONDRIVE_SPATIAL_PID=1
 监控日志会写到：
 
 /share/home/u19666033/ltr/dd_logs/full_baseline_basic/${RUN_ID}/closed_loop_bench2drive/monitor/node_monitor.log
+
+### 文件修正
+
+你这个现象的核心是：CarlaUE4 进程存在不等于 CARLA RPC 已经可用。之前脚本只检查 PID，所以 CARLA 半启动/卡住时 evaluator 还是会进去等
+get_world().apply_settings()，最后报 300s timeout。
+
+我已经更新了脚本：
+
+carla_garage/tools/run_baseline_basic_closed_loop.sh
+
+改了两点：
+
+- evaluator 前新增 CARLA RPC readiness probe：主动调用 carla.Client(...).get_world().apply_settings(...)，确认 simulator 真能响应后才启动
+evaluator。
+
+- evaluator 管道加了 pipefail，避免 Python traceback 但 tee 成功导致 eval_code=0 的误判。
+
+运行建议：
+
+cd /share/home/u19666033/ltr/carla_garage
+
+START_IDX=15 \
+END_IDX=219 \
+MAX_ATTEMPTS=3 \
+CARLA_START_WAIT=30 \
+CARLA_READY_TIMEOUT=180 \
+CARLA_READY_INTERVAL=5 \
+EVAL_TIMEOUT=300 \
+bash tools/run_baseline_basic_closed_loop.sh
+
+如果之后看到：
+
+CARLA process is alive but RPC is not ready
+
+说明 CARLA 进程还在，但 RPC 端口不可用/初始化卡死，脚本会杀掉并 retry，不会再白等 evaluator 的 300 秒。
+
+另外这行：
+
+FUnixPlatformMisc::RequestExit
+
+多半是脚本清理时终止 CARLA 产生的，不一定是原始崩溃原因。真正要看的是它前面有没有 RenderThread timed out、Signal 11、Segmentation fault，
+或者 readiness probe 一直连不上。

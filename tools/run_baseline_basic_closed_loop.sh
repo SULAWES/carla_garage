@@ -9,8 +9,11 @@ START_IDX=${START_IDX:-0}
 END_IDX=${END_IDX:-219}
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-2}
 CARLA_START_WAIT=${CARLA_START_WAIT:-25}
+CARLA_READY_TIMEOUT=${CARLA_READY_TIMEOUT:-120}
+CARLA_READY_INTERVAL=${CARLA_READY_INTERVAL:-5}
 ROUTE_CLEANUP_WAIT=${ROUTE_CLEANUP_WAIT:-10}
 EVAL_TIMEOUT=${EVAL_TIMEOUT:-300}
+PYTHON_BIN=${PYTHON_BIN:-python}
 
 CARLA_ROOT=${CARLA_ROOT:-/share/home/u19666033/syb/carla_0_9_15}
 WORK_DIR=${WORK_DIR:-/share/home/u19666033/ltr/carla_garage}
@@ -47,7 +50,7 @@ export DIFFUSIONDRIVE_IMAGE_NORMALIZATION=${DIFFUSIONDRIVE_IMAGE_NORMALIZATION:-
 mkdir -p "${OUT}/results" "${OUT}/logs" "${OUT}/carla_logs" "${OUT}/monitor"
 
 result_is_complete() {
-  python - "$1" <<'PY'
+  "${PYTHON_BIN}" - "$1" <<'PY'
 import json
 import sys
 
@@ -78,6 +81,43 @@ for record in records:
         sys.exit(1)
 
 sys.exit(0)
+PY
+}
+
+wait_for_carla_ready() {
+  "${PYTHON_BIN}" - "$1" "$2" "$3" <<'PY'
+import sys
+import time
+
+import carla
+
+port = int(sys.argv[1])
+timeout = float(sys.argv[2])
+interval = float(sys.argv[3])
+deadline = time.time() + timeout
+last_error = None
+
+while time.time() < deadline:
+    try:
+        client = carla.Client("localhost", port)
+        client.set_timeout(min(5.0, max(1.0, interval)))
+        world = client.get_world()
+        settings = carla.WorldSettings(
+            synchronous_mode=True,
+            fixed_delta_seconds=0.05,
+            deterministic_ragdolls=True,
+            spectator_as_ego=False,
+        )
+        world.apply_settings(settings)
+        print(f"CARLA RPC ready on port {port}", flush=True)
+        sys.exit(0)
+    except Exception as exc:
+        last_error = exc
+        print(f"Waiting for CARLA RPC on port {port}: {exc}", flush=True)
+        time.sleep(interval)
+
+print(f"CARLA RPC not ready on port {port} after {timeout}s: {last_error}", flush=True)
+sys.exit(1)
 PY
 }
 
@@ -133,6 +173,7 @@ echo "Closed-loop output: ${OUT}"
 echo "Checkpoint: ${DIFFUSIONDRIVE_CHECKPOINT}"
 echo "Routes: ${START_IDX}..${END_IDX}"
 echo "Max attempts per route: ${MAX_ATTEMPTS}"
+echo "CARLA readiness timeout: ${CARLA_READY_TIMEOUT}s"
 
 start_monitor
 cd "${WORK_DIR}" || exit 1
@@ -188,7 +229,16 @@ for IDX in $(seq "${START_IDX}" "${END_IDX}"); do
       continue
     fi
 
-    setsid bash -c "
+    if ! wait_for_carla_ready "${PORT}" "${CARLA_READY_TIMEOUT}" "${CARLA_READY_INTERVAL}"; then
+      echo "CARLA process is alive but RPC is not ready: ${ROUTE_NAME} attempt=${ATTEMPT}"
+      tail -n 120 "${CARLA_LOG}" || true
+      cleanup_route_processes
+      sleep "${ROUTE_CLEANUP_WAIT}"
+      ATTEMPT=$((ATTEMPT + 1))
+      continue
+    fi
+
+    setsid bash -o pipefail -c "
       python -u leaderboard/leaderboard/leaderboard_evaluator_local.py \
         --host localhost \
         --port ${PORT} \
