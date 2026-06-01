@@ -328,5 +328,6 @@ baseline-basic 训练完成后，当前重点转为开环汇总和 CARLA / Bench
 1. 按固定六场景与 full scenarios CSV 汇总平均 `l1 / ade / fde`，作为论文 baseline-basic 的开环诊断。
 2. 闭环评测使用 sensor-only 协议，默认 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。
 3. 闭环长跑已开始，`bench2drive_00` 到 `bench2drive_11` 曾正常产出 route stats；后续遇到 CARLA/UE4 render thread crash 和 agent setup CUDA OOM，需要按基础设施问题处理，不应混入模型效果判断。
-4. 闭环结果 skip 逻辑不能只看 `status=Failed`。正常完成但驾驶失败的 route 也可能是 `Failed`，应以 `_checkpoint.progress`、records 是否存在、以及是否属于 `Failed - Agent couldn't be set up` / `Failed - Simulation crashed` / `Failed - Agent crashed` 等可重跑状态判断。
-5. Stage5 / Stage6 tuned hard-weight 路线只作为改进 / ablation 参考，不和 baseline-basic 混用。
+4. 部分 route 曾在前几秒因 `filterpy` UKF covariance 非正定触发 `numpy.linalg.LinAlgError`，现已在 `DiffusionDriveAgent` 加入 `P` 对称化 / jitter / measurement reset 保护；后续遇到 `[DiffusionDriveUKF] reset` 日志时应按定位滤波重置记录，不再视作模型预测失败。
+5. 闭环结果 skip 逻辑不能只看 `status=Failed`。正常完成但驾驶失败的 route 也可能是 `Failed`，应以 `_checkpoint.progress`、records 是否存在、以及是否属于 `Failed - Agent couldn't be set up` / `Failed - Simulation crashed` / `Failed - Agent crashed` 等可重跑状态判断。
+6. Stage5 / Stage6 tuned hard-weight 路线只作为改进 / ablation 参考，不和 baseline-basic 混用。

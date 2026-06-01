@@ -37,6 +37,10 @@ from diffusiondrive.status import build_status_feature
 from birds_eye_view.run_stop_sign import RunStopSign
 
 
+_UKF_INITIAL_COVARIANCE = np.diag([0.5, 0.5, 0.000001, 0.000001])
+_UKF_MIN_COVARIANCE_EIGENVALUE = 1e-9
+
+
 # Leaderboard function that selects the class used as agent.
 def get_entry_point():
     return "DiffusionDriveAgent"
@@ -121,11 +125,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                        residual_x=residual_state_x,
                        residual_z=residual_measurement_h)
 
-        self.ukf.P = np.diag([0.5, 0.5, 0.000001, 0.000001])
+        self.ukf.P = _UKF_INITIAL_COVARIANCE.copy()
         self.ukf.R = np.diag([0.5, 0.5, 0.000000000000001, 0.000000000000001])
         self.ukf.Q = np.diag([0.0001, 0.0001, 0.001, 0.001])
         self.filter_initialized = False
         self.state_log = deque(maxlen=max((self.config.lidar_seq_len * self.config.data_save_freq), 2))
+        self.ukf_reinitializations = 0
 
         self.stuck_detector = 0
         self.force_move = 0
@@ -359,13 +364,21 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         result['lidar'] = t_u.lidar_to_ego_coordinate(self.config, input_data['lidar'])
 
-        if not self.filter_initialized:
-            self.ukf.x = np.array([gps_pos[0], gps_pos[1], t_u.normalize_angle(compass), speed])
-            self.filter_initialized = True
+        measurement = np.array([gps_pos[0], gps_pos[1], t_u.normalize_angle(compass), speed], dtype=np.float64)
 
-        self.ukf.predict(steer=self.control.steer, throttle=self.control.throttle, brake=self.control.brake)
-        self.ukf.update(np.array([gps_pos[0], gps_pos[1], t_u.normalize_angle(compass), speed]))
-        filtered_state = self.ukf.x
+        if not self.filter_initialized:
+            self._reset_ukf(measurement, reason="initial measurement")
+
+        try:
+            self._stabilize_ukf_covariance()
+            self.ukf.predict(steer=self.control.steer, throttle=self.control.throttle, brake=self.control.brake)
+            self._stabilize_ukf_covariance()
+            self.ukf.update(measurement)
+            self._stabilize_ukf_covariance()
+            filtered_state = self.ukf.x
+        except np.linalg.LinAlgError as exc:
+            self._reset_ukf(measurement, reason=f"non-positive definite covariance: {exc}")
+            filtered_state = self.ukf.x
         self.state_log.append(filtered_state)
         result['gps'] = filtered_state[0:2]
 
@@ -727,6 +740,32 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"stuck={self.stuck_detector} "
             f"force_move={self.force_move} "
             f"stop_sign={bool(stop_for_stop_sign)}"
+        )
+
+    def _stabilize_ukf_covariance(self):
+        covariance = np.asarray(self.ukf.P, dtype=np.float64)
+        if covariance.shape != (4, 4) or not np.all(np.isfinite(covariance)):
+            self.ukf.P = _UKF_INITIAL_COVARIANCE.copy()
+            return
+
+        covariance = 0.5 * (covariance + covariance.T)
+        min_eigenvalue = float(np.min(np.linalg.eigvalsh(covariance)))
+        if min_eigenvalue < _UKF_MIN_COVARIANCE_EIGENVALUE:
+            covariance += np.eye(4) * (_UKF_MIN_COVARIANCE_EIGENVALUE - min_eigenvalue)
+        self.ukf.P = covariance
+
+    def _reset_ukf(self, measurement, reason):
+        self.ukf.x = np.asarray(measurement, dtype=np.float64)
+        self.ukf.P = _UKF_INITIAL_COVARIANCE.copy()
+        self.filter_initialized = True
+        self.ukf_reinitializations += 1
+        print(
+            "[DiffusionDriveUKF] reset "
+            f"count={self.ukf_reinitializations} "
+            f"reason={reason} "
+            f"measurement=({measurement[0]:.3f},{measurement[1]:.3f},"
+            f"{measurement[2]:.3f},{measurement[3]:.3f})",
+            flush=True,
         )
 
     def destroy(self, results=None):  # pylint: disable=unused-argument

@@ -126,6 +126,7 @@
   - 用 `t_u.lidar_to_ego_coordinate()` 把点云转换到 ego 坐标系
 - 状态估计：
   - 使用 UKF 融合 `gps + compass + speed`
+  - UKF 协方差矩阵 `P` 会在 predict/update 前后做对称化和最小 jitter 保护；如果仍触发 `numpy.linalg.LinAlgError`，则用当前 measurement 重置 UKF，避免闭环 route 因 covariance 非正定直接 agent crash
   - 更新 `state_log`
 - 导航处理：
   - 用 `RoutePlanner` 输出 route point
