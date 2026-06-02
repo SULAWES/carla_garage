@@ -925,3 +925,212 @@ for IDX in 24 0 94 50 139 9 15 212 115 185 153 203 105 19 101 4 167 194 102 43; 
     MAX_ATTEMPTS=5 \
     bash tools/run_baseline_basic_closed_loop.sh
 done
+
+run20 () {
+    EXP=$1
+    shift
+    for IDX in ${ROUTES}; do
+      env \
+        OUT=${BASE_OUT}/${EXP} \
+        START_IDX=${IDX} \
+        END_IDX=${IDX} \
+        MAX_ATTEMPTS=2 \
+        CARLA_READY_TIMEOUT=180 \
+        "$@" \
+        bash tools/run_baseline_basic_closed_loop.sh
+    done
+
+    python tools/result_parser.py \
+      --xml leaderboard/data/bench2drive220.xml \
+      --results ${BASE_OUT}/${EXP}/results
+}
+
+通用跑法
+在远端 carla_garage 下先定义：
+
+cd /share/home/u19666033/ltr/carla_garage
+
+ROUTES="24 0 94 50 139 9 15 212 115 185 153 203 105 19 101 4 167 194 102 43"
+BASE_OUT=/share/home/u19666033/ltr/dd_logs/full_baseline_basic/ablation_20routes
+
+run20 () {
+    EXP=$1
+    shift
+    for IDX in ${ROUTES}; do
+        env \
+        OUT=${BASE_OUT}/${EXP} \
+        START_IDX=${IDX} \
+        END_IDX=${IDX} \
+        MAX_ATTEMPTS=2 \
+        CARLA_READY_TIMEOUT=180 \
+        "$@" \
+        bash tools/run_baseline_basic_closed_loop.sh
+    done
+
+    python tools/result_parser.py \
+        --xml leaderboard/data/bench2drive220.xml \
+        --results ${BASE_OUT}/${EXP}/results
+}
+
+每个实验用一个新的 OUT，否则脚本会 skip 已完成 JSON。
+
+1. 基准复跑
+先复跑一次当前 baseline，确认 20-route 小集稳定性。
+
+run20 A0_baseline
+
+用途：后面所有实验都和 A0_baseline/results/results.csv 比。
+
+2. command delay
+这个现在不用改代码，直接测：
+
+run20 A1_command_delay DIFFUSIONDRIVE_COMMAND_DELAY=1
+
+重点看：bench2drive_94/50/139/09/15/212 的 route deviation 和 RC 是否改善。
+如果 deviation 下降但低速/碰撞变差，要谨慎。
+
+3. stop sign privileged ablation
+这个不是 sensor-only 主结果，只用来判断 stop sign 规则损失占比。
+
+run20 A2_stop_control STOP_CONTROL=1
+
+重点看：bench2drive_101/102/194/203/15/43 的 stop infractions、DS、collision。
+如果分数明显上升，说明 sensor-only stop sign 能力后面必须补。
+
+4. spatial PID fallback
+测一下旧 time-index 控制逻辑是不是完全不可用：
+
+run20 A3_time_index_pid DIFFUSIONDRIVE_SPATIAL_PID=0
+
+重点看：平均速度、min speed、route deviation。
+我预期它大概率不如 spatial PID，但值得作为 sanity check。
+
+5. debug 日志
+这个不一定要跑满 20 条，先跑 5-10 条代表 route：
+
+ROUTES_DEBUG="94 139 115 19 167 194"
+
+for IDX in ${ROUTES_DEBUG}; do
+    env \
+        OUT=${BASE_OUT}/D0_debug \
+        START_IDX=${IDX} \
+        END_IDX=${IDX} \
+        MAX_ATTEMPTS=1 \
+        DIFFUSIONDRIVE_DEBUG_CONTROL=1 \
+        DIFFUSIONDRIVE_DEBUG_INTERVAL=5 \
+        bash tools/run_baseline_basic_closed_loop.sh
+done
+
+看 logs/*_eval.log 里的：
+
+desired_speed
+turn_ratio
+aim_index
+steer/throttle/brake
+stuck
+force_move
+cmd_used/cmd_current/cmd_delayed
+
+这一步主要定位问题，不以分数为主。
+
+6. 低速允许转向
+这个当前还没有开关，需要先改代码加一个 env，例如 DIFFUSIONDRIVE_LOW_SPEED_STEER=1。加完后测：
+
+run20 A4_low_speed_steer DIFFUSIONDRIVE_LOW_SPEED_STEER=1
+
+重点 route：09 15 212 105 194 102 43。
+重点指标：route deviation、outside_route_lanes、collision。
+目标是减少低速起步直冲导致的偏航。
+
+7. 提前 stuck recovery
+当前 stuck_threshold=1100 基本太晚，也需要先加 env 覆盖，例如 DIFFUSIONDRIVE_STUCK_THRESHOLD。
+
+run20 A5_stuck120 DIFFUSIONDRIVE_STUCK_THRESHOLD=120
+run20 A6_stuck170 DIFFUSIONDRIVE_STUCK_THRESHOLD=170
+run20 A7_stuck300 DIFFUSIONDRIVE_STUCK_THRESHOLD=300
+
+重点 route：115 185 153 203 105 19 101 4 167。
+重点指标：vehicle_blocked、route_timeout、min_speed，同时必须看 collision 是否上升。
+如果 blocked 降了但 collision 大涨，阈值太激进。
+
+8. spatial PID 速度参数
+也建议先加 env 覆盖，例如：
+
+DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST
+DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW
+DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD
+DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD
+
+然后测：
+
+run20 A8_pid_7_3 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=7.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=3.0
+
+run20 A9_pid_6_2p5 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=6.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5
+
+重点 route：139 19 167 43 50 94。
+目标是减少 min speed，但不能明显增加 collision / route deviation。
+
+9. route guard / route blend
+这个需要实现后再测，建议 env：
+
+DIFFUSIONDRIVE_ROUTE_GUARD=1
+DIFFUSIONDRIVE_ROUTE_BLEND_ALPHA=0.3
+
+测试：
+
+run20 A10_route_guard \
+    DIFFUSIONDRIVE_ROUTE_GUARD=1 \
+    DIFFUSIONDRIVE_ROUTE_BLEND_ALPHA=0.3
+
+重点 route：94 50 139 09 15 212。
+这是最针对 deviated=69 的实验。目标是 route_dev 明显下降，RC 上升，且正常 route 24/00 不退化。
+
+比较结果
+每个实验跑完后看：
+
+for EXP in A0_baseline A1_command_delay A2_stop_control A3_time_index_pid A4_low_speed_steer A5_stuck120 A8_pid_7_3 A10_route_guard; do
+    echo "===== ${EXP} ====="
+    sed -n '1,18p' ${BASE_OUT}/${EXP}/results/results.csv
+done
+
+我的建议顺序是：
+
+1. A0_baseline
+2. D0_debug
+3. A1_command_delay
+4. A2_stop_control
+5. 先改代码加 env 开关
+6. A4_low_speed_steer
+7. A5/A6/A7 stuck threshold
+8. A8/A9 PID speed
+9. A10 route guard
+
+最优先验证的是 low_speed_steer + stuck_threshold + route_guard，这三项最像是在修现在的执行层失败。
+
+已加好低速转向开关，默认不改变 baseline 行为。
+
+改动点：
+
+- carla_garage/team_code/diffusiondrive_agent.py:87 新增 DIFFUSIONDRIVE_LOW_SPEED_STEER。
+- 默认 0：保持原逻辑，speed < 0.01 时清零横向 angle。
+- 设置 1：低速但未 brake 时保留预测轨迹对应的转向。
+- brake 激活时仍然清零 angle，避免停车/急刹状态下乱打方向。
+- debug 日志新增 angle、raw_angle、angle_reset、low_speed_steer。
+- carla_garage/tools/run_baseline_basic_closed_loop.sh:47 已导出默认值，远端脚本可直接传 env。
+- 已同步更新非 server 文档和根目录 AGENTS.md；docs/server/* 没有动。
+
+验证通过：
+
+python -m py_compile team_code/diffusiondrive_agent.py
+bash -n tools/run_baseline_basic_closed_loop.sh
+
+测试这个开关时用：
+
+run20 A4_low_speed_steer DIFFUSIONDRIVE_LOW_SPEED_STEER=1
+
+建议先重点看 bench2drive_09/15/50/94/139/212 的 route_dev / RC / collision，确认低速起步保留转向是否真的减少偏航。
+
