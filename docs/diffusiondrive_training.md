@@ -79,6 +79,21 @@ load_file=""
 
 这个 run 已尽量对齐原版 DiffusionDrive 的主要训练预算和优化器设置，并使用 `torchrun` / DDP 跑完；当前训练入口尚未对齐 AMP。训练结果、开环诊断和闭环进展记录在 `diffusiondrive_remote_training_progress.md`。
 
+本地下载的结果镜像位于：
+
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/
+```
+
+结果摘要：
+
+- Open-loop legacy six-scene：`l1_mean=0.0092`、`ade_mean=0.0152`、`fde_mean=0.0234`
+- Open-loop all-scenarios：`l1_mean=0.0192`、`ade_mean=0.0303`、`fde_mean=0.0483`
+- Closed-loop Bench2Drive 220：`DS=44.8074`、`RC=79.4774`、`NDS=35.5193`
+- Closed-loop status：`Completed=118`、`Perfect=1`、`deviated=69`、`blocked=27`、`timed out=5`
+
+这组结果说明 full baseline-basic 在开环轨迹误差上很强，但闭环仍是弱 baseline，后续持续学习或控制改进需要以闭环 failure modes 为主要诊断对象。
+
 ## Status Feature 与 Extra Sensors
 
 当前 DiffusionDrive 训练入口使用 `7` 维 `status_feature`：
@@ -404,7 +419,9 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - `trajectory_sampling.interval_length` 目前仍保留为 DiffusionDrive config 兼容字段，不代表当前空间 checkpoint target 的真实时间间隔。
 - 推理侧 `DiffusionDriveAgent` 默认启用空间 checkpoint PID，不再从 waypoint index 的 0.5s / 1.0s 时间假设估计 desired speed；可用 `DIFFUSIONDRIVE_SPATIAL_PID=0` 临时回到旧逻辑做 A/B。
 - 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
-- 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、control、stuck / force_move / stop sign。
+- 推理侧新增 `DIFFUSIONDRIVE_LOW_SPEED_STEER=1` 闭环 A/B 开关：低速近似静止但未 brake 时保留横向 PID angle，默认 `0` 以保持 baseline 行为；该开关用于验证低速起步直行是否导致 route deviation。
+- 推理侧 UKF 已加入 covariance 正定保护和 measurement reset，避免 `filterpy` 在 `P` 非正定时直接导致 agent crash。
+- 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、angle reset、control、stuck / force_move / stop sign。
 - 远端闭环 A/B 前必须同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`；新版 agent 依赖 `GlobalConfig.diffusiondrive_spatial_pid*` 默认参数。
 - 已支持 `torchrun` / DDP 多卡训练；暂不支持 AMP / EMA。
 - 暂不训练 auxiliary heads。

@@ -2,12 +2,13 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-05-31
+**更新日期**: 2026-06-02
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
 - 因此训练侧优先级高于继续对齐 navsim checkpoint 语义
 - full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
+- baseline-basic 开环 / 闭环结果已完成并下载到本地 `dd_logs` 镜像路径；open-loop six-scene `l1_mean=0.0092`，all-scenarios `l1_mean=0.0192`，Bench2Drive 220 closed-loop `DS=44.81`、`RC=79.48`、`NDS=35.52`
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -79,6 +80,7 @@
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
   - [x] 已完成 full baseline-basic 训练，作为论文 baseline 和后续持续学习工作的干净基础；Stage5 / Stage6 tuned hard-weight checkpoint 只作为 ablation / 改进参考
+  - [x] 已完成 baseline-basic full-scenario open-loop 和 Bench2Drive 220 closed-loop 汇总，并归档到本地 `dd_logs/eval_summaries`
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset
 
 ### P1 级别（直接影响训练效果）
@@ -129,9 +131,10 @@
   - [ ] 明确多任务损失是否继续保留
 
 - [ ] **评测与控制闭环设计**
-  - [ ] 明确训练完成后继续用 waypoint PID 还是改控制器
+  - [x] baseline-basic 已完成一次 sensor-only Bench2Drive 220 闭环，确认当前空间 PID 可以完成评测但闭环表现较弱
   - [x] 当前 target / anchor 是空间 checkpoint 语义，`DiffusionDriveAgent` 默认空间 PID 已不再用 waypoint 时间索引估计 desired speed
-  - [ ] 明确训练指标与 leaderboard 指标的对齐方式
+  - [x] 已确认当前开环 `l1 / ade / fde` 与 leaderboard closed-loop 指标不充分对齐：baseline-basic 开环极低误差仍只得到 `DS=44.81`
+  - [ ] 设计面向闭环 failure modes 的训练 / 调参指标，重点覆盖 route deviation、blocked、低速和 collisions
 
 - [ ] **训练工程可复现性**
   - [ ] `--resume-file` 当前只从 checkpoint 的下一个 epoch 继续，不恢复 dataloader epoch 内位置；长训前决定是否需要精确断点恢复
@@ -140,6 +143,7 @@
   - [ ] 给 full 数据 smoke 增加吞吐量、显存、grad norm、target 分布统计
 
 - [ ] **闭环调参与可观测性**
+  - [x] `DiffusionDriveAgent` UKF 已加入 covariance 正定保护和 measurement reset，避免部分 route 在前几秒因 `numpy.linalg.LinAlgError` 直接 agent crash
   - [ ] 调 `safety_box_*` 阈值，适配训练后模型的闭环行为
   - [ ] 评估 `stuck_threshold` / `creep_duration` 是否需要联调
   - [ ] 收敛 creep / safety box 相关日志输出，避免长跑日志过噪

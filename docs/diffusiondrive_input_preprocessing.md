@@ -150,6 +150,15 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
    ```
    目标是确认短 route 能正常进入模型推理，日志显示 JPEG artifact 开启、normalization 为 `none`。
 
+## 当前 baseline-basic 结论
+
+full baseline-basic 训练和评测仍沿用当前预处理主线：`DIFFUSIONDRIVE_JPEG_ARTIFACT=1`、`DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none`。结果显示：
+
+- Open-loop all-scenarios `l1_mean=0.0192`，说明当前预处理足以支撑很低的离线轨迹误差。
+- Closed-loop Bench2Drive 220 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明闭环仍明显受控制、sensor gap、规则合规或交互行为影响。
+
+因此后续不应只根据 open-loop loss 决定是否改预处理；任何 JPEG / normalization / sensor geometry 变更都需要配套小规模闭环 A/B。
+
 3. 预处理开关 smoke test：
    ```bash
    export DIFFUSIONDRIVE_JPEG_ARTIFACT=0

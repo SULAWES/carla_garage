@@ -6,6 +6,7 @@ Env vars:
   - DIFFUSIONDRIVE_BACKBONE_PATH: optional timm backbone weights.
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
+  - DIFFUSIONDRIVE_LOW_SPEED_STEER: keep steering active at near-zero speed unless braking (default: 0).
   - DIFFUSIONDRIVE_DEBUG_CONTROL: print low-frequency control diagnostics (default: 0).
   - DIFFUSIONDRIVE_DEBUG_INTERVAL: control diagnostic print interval in steps (default: 20).
 """
@@ -83,8 +84,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         ))
         self.debug_control = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_CONTROL", "0"))
         self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
+        self.low_speed_steer = strtobool(os.environ.get("DIFFUSIONDRIVE_LOW_SPEED_STEER", "0"))
         print("DiffusionDrive command delay:", self.use_command_delay)
         print("DiffusionDrive spatial PID:", self.use_spatial_pid)
+        print("DiffusionDrive low-speed steer:", self.low_speed_steer)
         print("DiffusionDrive control debug:", self.debug_control)
 
         # DiffusionDrive model config
@@ -481,9 +484,15 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                 break
 
         aim = waypoints[aim_index]
-        angle = np.degrees(np.arctan2(aim[1], aim[0])) / 90.0
-        if speed < 0.01 or brake:
+        raw_angle = np.degrees(np.arctan2(aim[1], aim[0])) / 90.0
+        angle = raw_angle
+        angle_reset_reason = ""
+        if brake:
             angle = 0.0
+            angle_reset_reason = "brake"
+        elif speed < 0.01 and not self.low_speed_steer:
+            angle = 0.0
+            angle_reset_reason = "low_speed"
 
         steer = self.turn_controller.step(angle)
         steer = np.clip(steer, -1.0, 1.0)
@@ -496,6 +505,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             "aim_index": int(aim_index),
             "aim_x": float(aim[0]),
             "aim_y": float(aim[1]),
+            "raw_angle": float(raw_angle),
+            "angle": float(angle),
+            "angle_reset_reason": angle_reset_reason,
+            "low_speed_steer": bool(self.low_speed_steer),
         }
         return steer, throttle, brake
 
@@ -734,6 +747,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"endpoint_dist={pid_debug.get('endpoint_distance', float('nan')):.3f} "
             f"aim_index={pid_debug.get('aim_index')} "
             f"aim=({pid_debug.get('aim_x', float('nan')):.3f},{pid_debug.get('aim_y', float('nan')):.3f}) "
+            f"angle={pid_debug.get('angle', float('nan')):.3f} "
+            f"raw_angle={pid_debug.get('raw_angle', float('nan')):.3f} "
+            f"angle_reset={pid_debug.get('angle_reset_reason')} "
+            f"low_speed_steer={pid_debug.get('low_speed_steer')} "
             f"control=(steer={float(self.control.steer):.3f},"
             f"throttle={float(self.control.throttle):.3f},"
             f"brake={float(self.control.brake):.3f}) "

@@ -198,28 +198,28 @@
 
 ---
 
-## 8. 待明确的问题清单（决策阻塞点）
+## 8. 当前已冻结 / 已验证的决策
 
-在进入 CARLA 训练或系统调参之前，以下问题必须有明确答案：
+以下早期阻塞点已被当前 baseline-basic 主线明确：
 
-1. **相机输入策略**：单前视？三相机拼接？是否保留 JPEG？
-2. **轨迹维度**：统一采用 `8x2` 还是 `8x3`？
-3. **训练时辅助头**：是否关闭 `bev_semantic` 和 `agent_detection`？若开启，label 如何生成？
-4. **LiDAR / BEV 对齐验证**：`lidar_to_ego_coordinate()` 与 `align_lidar()` 的组合在时序帧上是否与 BEV 坐标系完全一致？建议增加可视化验证。
-5. **Diffusion 超参数**：`trunc_timesteps=8`、`step_num=2` 等默认设置是否适合 CARLA 闭环分布？是否应参数化以便 grid search？
-6. **Stop Sign Controller**：是否从 `sensor_agent.py` 迁移到 `DiffusionDriveAgent`？
-7. **新聚类 anchor**：是否正式切到 `99x10x2`，以及如何同步处理 mode 数、时间步长度和 checkpoint 兼容问题？
+1. **相机输入策略**：第一阶段采用 CARLA-native 单前视，保留 JPEG artifact，默认不做 ImageNet normalization。
+2. **轨迹维度**：正式采用 `99x10x2` anchor；主轨迹只预测 XY，不预测 heading。
+3. **轨迹 target 语义**：默认 `spatial_path`，按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样，不再把 target 当作 fixed-time trajectory。
+4. **状态输入**：训练 / 推理共用 `command_one_hot(6)+speed(1)` 的 7 维 `status_feature`。
+5. **Stop Sign Controller**：`DiffusionDriveAgent` 保留 actor-based privileged controller，但 baseline-basic / sensor-only 主线默认 `STOP_CONTROL=0`。
+6. **闭环定位滤波**：UKF 已加 covariance 正定保护和 measurement reset，避免 `filterpy` 的 `LinAlgError` 直接导致 agent crash。
+7. **训练配置**：full baseline-basic 已用 B2D Full scenario-balanced 全量 manifest、4 卡 L40 / DDP、`epochs=100` 跑完。
 
 ---
 
 ## 9. 结论
 
-- **LiDAR 时序、UKF、RoutePlanner、PID 控制、基础推理链路**已经接通，不是当前主要瓶颈。
-- **最大的输入分布 mismatch 是相机**（单前视 vs 三相机拼接），但 `dd_todo.md` 中未明确记录。
-- **最大的模型内部债务是轨迹表示的半对齐**（2D `norm_odo` + 3D 输出），这会影响 diffusion 行为的可预测性，也阻碍了训练设计的统一。
+- **LiDAR 时序、UKF、RoutePlanner、PID 控制、基础推理链路**已经接通；UKF 数值稳定性问题已加保护。
+- **baseline-basic 开环很强但闭环仍弱**：full-scenario open-loop `l1_mean=0.0192`，但 Bench2Drive 220 closed-loop 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`。
+- **当前最大问题已经从训练链路转为闭环行为**：route deviation、blocked、低速和 collisions 是主要失败模式。
+- **sensor / control gap 仍需显式处理**：B2D Full raw sensor 与在线 garage sensor suite 的 FOV / pose / LiDAR 外参 gap 仍可能影响闭环；空间 checkpoint target 和 PID 控制之间也需要继续调参或引入显式 speed/control head。
 - 建议的推进顺序：
-  1. 明确相机输入策略和轨迹维度决策。
-  2. 验证 LiDAR / BEV 对齐。
-  3. 收敛 Config 映射并补齐关键注释。
-  4. 规划 CARLA 训练时的辅助头取舍。
-  5. 再考虑 ensemble、stop sign controller 等增强项。
+  1. 对 220 条闭环结果按 route deviation / blocked / timeout / collision 做失败聚类。
+  2. 做 command delay、空间 PID、stuck / creep / safety box 的闭环 A/B。
+  3. 验证 sensor contract gap，必要时做推理侧对齐或 finetune。
+  4. 再考虑显式 speed/control head、辅助头、sensor-only stop sign 和持续学习方法。

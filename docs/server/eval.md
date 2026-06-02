@@ -894,7 +894,7 @@ evaluator。
 
 cd /share/home/u19666033/ltr/carla_garage
 
-START_IDX=15 \
+START_IDX=60 \
 END_IDX=219 \
 MAX_ATTEMPTS=5 \
 CARLA_START_WAIT=30 \
@@ -915,3 +915,13 @@ FUnixPlatformMisc::RequestExit
 
 多半是脚本清理时终止 CARLA 产生的，不一定是原始崩溃原因。真正要看的是它前面有没有 RenderThread timed out、Signal 11、Segmentation fault，
 或者 readiness probe 一直连不上。
+
+
+### A/B 测试
+
+for IDX in 24 0 94 50 139 9 15 212 115 185 153 203 105 19 101 4 167 194 102 43; do
+    START_IDX=${IDX} END_IDX=${IDX} \
+    OUT=/share/home/u19666033/ltr/dd_logs/full_baseline_basic/ablation_20routes/current \
+    MAX_ATTEMPTS=5 \
+    bash tools/run_baseline_basic_closed_loop.sh
+done

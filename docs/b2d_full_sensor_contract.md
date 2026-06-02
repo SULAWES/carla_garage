@@ -114,8 +114,8 @@ anchor 估计语义：
 
 ## 后续建议
 
-1. full training 前先在 B2D Full 上跑小 smoke 和吞吐量测试。
-2. B2D Full 采用 `scenario/route` 两层结构时，优先用 `--balanced-scenarios` 和 `--max-samples-per-scenario` 避免按目录排序截断导致的场景偏置。
-3. 抽样可视化 raw image、preprocessed image、LiDAR BEV 和 target trajectory。
-4. 针对空间 checkpoint target，推理侧已默认启用空间 PID；后续需要通过闭环评测调参 slow / fast 速度和 turn threshold。
+1. full baseline-basic 已完成，B2D Full raw + scenario-balanced manifest 能支持全量训练，且 open-loop all-scenarios `l1_mean=0.0192`。
+2. 当前 closed-loop Bench2Drive 220 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明仅靠 B2D Full open-loop 轨迹误差不能保证闭环表现。
+3. 后续应抽样对比 raw image、preprocessed image、LiDAR BEV、target trajectory 和在线闭环失败帧，重点排查 route deviation / blocked / collisions 与 sensor contract gap 的关系。
+4. 针对空间 checkpoint target，推理侧已默认启用空间 PID；后续需要通过闭环 A/B 调参 slow / fast 速度、turn threshold、stuck / creep / safety box。
 5. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。

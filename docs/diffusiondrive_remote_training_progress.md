@@ -323,11 +323,52 @@ distributed=torchrun/DDP
 
 ## Post-Training Evaluation Status
 
-baseline-basic 训练完成后，当前重点转为开环汇总和 CARLA / Bench2Drive 闭环评测：
+baseline-basic 训练完成后，已完成 full-scenario 开环诊断和 Bench2Drive 220 sensor-only 闭环评测。结果已下载到本地镜像路径：
 
-1. 按固定六场景与 full scenarios CSV 汇总平均 `l1 / ade / fde`，作为论文 baseline-basic 的开环诊断。
-2. 闭环评测使用 sensor-only 协议，默认 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。
-3. 闭环长跑已开始，`bench2drive_00` 到 `bench2drive_11` 曾正常产出 route stats；后续遇到 CARLA/UE4 render thread crash 和 agent setup CUDA OOM，需要按基础设施问题处理，不应混入模型效果判断。
-4. 部分 route 曾在前几秒因 `filterpy` UKF covariance 非正定触发 `numpy.linalg.LinAlgError`，现已在 `DiffusionDriveAgent` 加入 `P` 对称化 / jitter / measurement reset 保护；后续遇到 `[DiffusionDriveUKF] reset` 日志时应按定位滤波重置记录，不再视作模型预测失败。
-5. 闭环结果 skip 逻辑不能只看 `status=Failed`。正常完成但驾驶失败的 route 也可能是 `Failed`，应以 `_checkpoint.progress`、records 是否存在、以及是否属于 `Failed - Agent couldn't be set up` / `Failed - Simulation crashed` / `Failed - Agent crashed` 等可重跑状态判断。
-6. Stage5 / Stage6 tuned hard-weight 路线只作为改进 / ablation 参考，不和 baseline-basic 混用。
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_basic/origlike_ddp4_bs64x4_lr6e-4_ep100_fs5_spatial_imgenc0p5/
+```
+
+本地汇总文件：
+
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/baseline_basic_open_loop_summary.csv
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/baseline_basic_closed_loop_summary.csv
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/aggregate_summary.csv
+```
+
+开环结果：
+
+| Scope | Scenes | Samples | L1 mean | L1 median | L1 p95 | L1 p99 | L1 > 2 | ADE mean | FDE mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| legacy six-scene | 6 | 6144 | 0.0092 | 0.0023 | 0.0176 | 0.0305 | 4 | 0.0152 | 0.0234 |
+| all scenarios | 39 | 39844 | 0.0192 | 0.0028 | 0.0188 | 0.0391 | 74 | 0.0303 | 0.0483 |
+
+闭环结果：
+
+| Metric | Value |
+|---|---:|
+| Avg. driving score | 44.8074 |
+| Avg. route completion | 79.4774 |
+| Avg. infraction penalty | 0.5334 |
+| Avg. normalized DS | 35.5193 |
+| Avg. speed km/h | 4.6448 |
+
+闭环 status 分布：
+
+| Status | Count |
+|---|---:|
+| Completed | 118 |
+| Perfect | 1 |
+| Failed - Agent deviated from the route | 69 |
+| Failed - Agent got blocked | 27 |
+| Failed - Agent timed out | 5 |
+
+当前判断：
+
+1. baseline-basic 是有效的论文基础 baseline：训练配置干净，不混入 Stage5 / Stage6 hard-weight tuning 或持续学习方法。
+2. full baseline-basic 的开环轨迹误差显著低于 Stage5 / Stage6 的旧六场景 tuned checkpoint，但闭环只达到弱 baseline 水平。
+3. 开环提升没有干净迁移到闭环，主要失败模式是 route deviation、vehicle blockage、低速和 collisions。
+4. 闭环评测使用 sensor-only 协议，默认 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。
+5. 部分 route 曾在前几秒因 `filterpy` UKF covariance 非正定触发 `numpy.linalg.LinAlgError`，现已在 `DiffusionDriveAgent` 加入 `P` 对称化 / jitter / measurement reset 保护；后续遇到 `[DiffusionDriveUKF] reset` 日志时应按定位滤波重置记录，不再视作模型预测失败。
+6. 闭环结果 skip 逻辑不能只看 `status=Failed`。正常完成但驾驶失败的 route 也可能是 `Failed`，应以 `_checkpoint.progress`、records 是否存在、以及是否属于 setup/crash 类状态判断。

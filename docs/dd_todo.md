@@ -348,11 +348,11 @@
 
 ## 建议的推进顺序
 
-1. 汇总已完成 full baseline-basic 的固定六场景 / full scenarios 开环 CSV 预测误差
-2. 继续推进 baseline-basic 的 sensor-only 闭环评测，默认 `STOP_CONTROL=0`
-3. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案
-4. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap
-5. 再考虑是否利用辅助头、改控制器或做 ensemble
+1. 基于已完成的 baseline-basic 220 条闭环结果，优先分析 route deviation、blocked、低速和 collisions 的具体触发场景。
+2. 做闭环 A/B：`DIFFUSIONDRIVE_COMMAND_DELAY`、`DIFFUSIONDRIVE_LOW_SPEED_STEER`、空间 PID 参数、stuck / creep / safety box 阈值，并保持 `STOP_CONTROL=0` 作为 sensor-only 主线。
+3. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
+4. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap，判断是否需要推理 sensor contract 对齐或 finetune。
+5. 再考虑是否利用辅助头、显式 speed/control head、闭环导向数据增强或持续学习方法。
 
 ---
 

@@ -1,6 +1,6 @@
 # 已完成工作记录
 
-**更新日期**: 2026-05-29
+**更新日期**: 2026-06-02
 
 本文档只记录已经完成的工作，详细问题分析见 `docs/lidar_bev_alignment_issues.md`，后续事项见 `docs/dd_todo.md`。
 
@@ -12,6 +12,8 @@
 - 已增强 checkpoint 加载逻辑，支持常见容器字段、前缀清理、shape 匹配加载，并输出 missing / unexpected / mismatch 摘要。
 - 已梳理 NAVSIM DiffusionDrive 与 CARLA 运行链路之间的主要差异，形成 `docs/diffusiondrive_navsim_vs_carla_gap.md`。
 - 已整理运行方式、工程注意事项和 agent 解释文档，包括 `docs/diffusiondrive_run.md`、`docs/engineering.md`、`docs/diffusiondrive_agent_explained.md`。
+- 已完成 full baseline-basic 训练：4 卡 L40 / DDP、B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU batch 64、`lr=6e-4`、`image_encoder_lr_mult=0.5`。
+- 已完成 baseline-basic full-scenario open-loop 汇总和 Bench2Drive 220 sensor-only closed-loop 汇总，并下载到本地 `dd_logs` 镜像路径。
 
 ## 运行时功能补齐
 
@@ -19,6 +21,15 @@
 - 已接入 safety box，包括前方 LiDAR 安全框过滤、emergency stop 逻辑和相关阈值配置。
 - 已接入基于 CARLA world stop sign actor 的 stop sign controller，不再依赖旧版 bbox stop sign 检测头；baseline-basic / sensor-only 主线默认 `STOP_CONTROL=0`，privileged 规则停车 ablation 需显式开启。
 - 已梳理 `status_feature` 与 `extra_sensors` 的职责边界；当前 DiffusionDrive 训练和推理共用 `command_one_hot(6) + speed(1)` 的 7 维 `status_feature`，不再使用旧的 velocity / acceleration 组合。
+- 已给 `DiffusionDriveAgent` 的 UKF 状态估计加入 covariance 正定保护和 measurement reset，避免 `filterpy` 在 `P` 非正定时让闭环 route 直接 agent crash。
+
+## Baseline-Basic 评测归档
+
+- Open-loop legacy six-scene：`l1_mean=0.0092`、`ade_mean=0.0152`、`fde_mean=0.0234`。
+- Open-loop all-scenarios：39 scenes、39844 samples、`l1_mean=0.0192`、`ade_mean=0.0303`、`fde_mean=0.0483`。
+- Closed-loop Bench2Drive 220：`DS=44.8074`、`RC=79.4774`、`NDS=35.5193`。
+- Closed-loop status：`Completed=118`、`Perfect=1`、`Failed - Agent deviated from the route=69`、`Failed - Agent got blocked=27`、`Failed - Agent timed out=5`。
+- 当前结论：baseline-basic 开环轨迹误差很低，但闭环仍是弱 baseline，主要失败模式是 route deviation、blocked、低速和 collisions。
 
 ## LiDAR 时序与对齐
 
