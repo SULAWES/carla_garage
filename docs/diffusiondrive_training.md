@@ -418,6 +418,7 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - `future_stride` 只用于 `--target-mode future_ego_time` legacy 路径；默认训练不再把 target 点解释为固定时间间隔。
 - `trajectory_sampling.interval_length` 目前仍保留为 DiffusionDrive config 兼容字段，不代表当前空间 checkpoint target 的真实时间间隔。
 - 推理侧 `DiffusionDriveAgent` 默认启用空间 checkpoint PID，不再从 waypoint index 的 0.5s / 1.0s 时间假设估计 desired speed；可用 `DIFFUSIONDRIVE_SPATIAL_PID=0` 临时回到旧逻辑做 A/B。
+- 空间 PID 的速度和转弯阈值已支持 env 覆盖：`DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST`、`DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW`、`DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD`、`DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD`；未设置时继续使用 `GlobalConfig` 默认值。
 - 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
 - 推理侧新增 `DIFFUSIONDRIVE_LOW_SPEED_STEER=1` 闭环 A/B 开关：低速近似静止但未 brake 时保留横向 PID angle，默认 `0` 以保持 baseline 行为；该开关用于验证低速起步直行是否导致 route deviation。
 - 推理侧 UKF 已加入 covariance 正定保护和 measurement reset，避免 `filterpy` 在 `P` 非正定时直接导致 agent crash。

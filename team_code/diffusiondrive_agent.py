@@ -6,6 +6,10 @@ Env vars:
   - DIFFUSIONDRIVE_BACKBONE_PATH: optional timm backbone weights.
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
+  - DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST: override spatial PID fast target speed.
+  - DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW: override spatial PID slow target speed.
+  - DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD: override turn-ratio slowdown threshold.
+  - DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD: override full-slowdown turn-ratio threshold.
   - DIFFUSIONDRIVE_LOW_SPEED_STEER: keep steering active at near-zero speed unless braking (default: 0).
   - DIFFUSIONDRIVE_DEBUG_CONTROL: print low-frequency control diagnostics (default: 0).
   - DIFFUSIONDRIVE_DEBUG_INTERVAL: control diagnostic print interval in steps (default: 20).
@@ -51,6 +55,16 @@ def strtobool(v):
     return str(v).lower() in ("yes", "y", "true", "t", "1", "True")
 
 
+def env_float(name, default):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a float, got {value!r}.") from exc
+
+
 class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
     """DiffusionDrive agent for CARLA leaderboard."""
 
@@ -82,11 +96,34 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             "DIFFUSIONDRIVE_SPATIAL_PID",
             str(int(bool(self.config.diffusiondrive_spatial_pid))),
         ))
+        self.config.diffusiondrive_spatial_pid_speed_fast = env_float(
+            "DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST",
+            self.config.diffusiondrive_spatial_pid_speed_fast,
+        )
+        self.config.diffusiondrive_spatial_pid_speed_slow = env_float(
+            "DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW",
+            self.config.diffusiondrive_spatial_pid_speed_slow,
+        )
+        self.config.diffusiondrive_spatial_pid_turn_threshold = env_float(
+            "DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD",
+            self.config.diffusiondrive_spatial_pid_turn_threshold,
+        )
+        self.config.diffusiondrive_spatial_pid_sharp_turn_threshold = env_float(
+            "DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD",
+            self.config.diffusiondrive_spatial_pid_sharp_turn_threshold,
+        )
         self.debug_control = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_CONTROL", "0"))
         self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
         self.low_speed_steer = strtobool(os.environ.get("DIFFUSIONDRIVE_LOW_SPEED_STEER", "0"))
         print("DiffusionDrive command delay:", self.use_command_delay)
         print("DiffusionDrive spatial PID:", self.use_spatial_pid)
+        print(
+            "DiffusionDrive spatial PID params: "
+            f"speed_fast={self.config.diffusiondrive_spatial_pid_speed_fast}, "
+            f"speed_slow={self.config.diffusiondrive_spatial_pid_speed_slow}, "
+            f"turn_threshold={self.config.diffusiondrive_spatial_pid_turn_threshold}, "
+            f"sharp_turn_threshold={self.config.diffusiondrive_spatial_pid_sharp_turn_threshold}"
+        )
         print("DiffusionDrive low-speed steer:", self.low_speed_steer)
         print("DiffusionDrive control debug:", self.debug_control)
 
