@@ -1159,3 +1159,70 @@ run20 A12_pid_7_2p5_turn_0p20_0p45 \
     DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5 \
     DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD=0.20 \
     DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD=0.45
+
+
+然后在远端 carla_garage 里定义 run20：
+
+ROUTES="24 0 94 50 139 9 15 212 115 185 153 203 105 19 101 4 167 194 102 43"
+BASE_OUT=/share/home/u19666033/ltr/dd_logs/full_baseline_basic/ablation_20routes_sensor
+
+run20 () {
+    EXP=$1
+    shift
+    for IDX in ${ROUTES}; do
+        env \
+        OUT=${BASE_OUT}/${EXP} \
+        START_IDX=${IDX} \
+        END_IDX=${IDX} \
+        MAX_ATTEMPTS=2 \
+        CARLA_READY_TIMEOUT=180 \
+        "$@" \
+        bash tools/run_baseline_basic_closed_loop.sh
+    done
+
+    python tools/result_parser.py \
+        --xml leaderboard/data/bench2drive220.xml \
+        --results ${BASE_OUT}/${EXP}/results
+}
+
+先跑这三组：
+
+run20 S1_camera_b2d_like \
+    DIFFUSIONDRIVE_CAMERA_FOV=70 \
+    DIFFUSIONDRIVE_CAMERA_POS=0.8,0.0,1.6 \
+    DIFFUSIONDRIVE_CAMERA_ROT=0.0,0.0,0.0 \
+    DIFFUSIONDRIVE_CROP_IMAGE=1 \
+    DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT=256 \
+    DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024
+
+run20 S1_pid_6_2p5_camera_b2d_like \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=6.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5 \
+    DIFFUSIONDRIVE_CAMERA_FOV=70 \
+    DIFFUSIONDRIVE_CAMERA_POS=0.8,0.0,1.6 \
+    DIFFUSIONDRIVE_CAMERA_ROT=0.0,0.0,0.0 \
+    DIFFUSIONDRIVE_CROP_IMAGE=1 \
+    DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT=256 \
+    DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024
+
+run20 S2_nocrop_diag \
+    DIFFUSIONDRIVE_CAMERA_FOV=70 \
+    DIFFUSIONDRIVE_CAMERA_POS=0.8,0.0,1.6 \
+    DIFFUSIONDRIVE_CAMERA_ROT=0.0,0.0,0.0 \
+    DIFFUSIONDRIVE_CROP_IMAGE=0 \
+    DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT=256 \
+    DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024
+
+如果时间有限，优先级是：
+
+1. S1_camera_b2d_like
+2. S1_pid_6_2p5_camera_b2d_like
+3. S2_nocrop_diag
+
+另外建议单独跑一个 debug 子集，不用 20 条全跑：
+
+ROUTES="212 194 203 101 43" run20 D1_route_safety_debug \
+    DIFFUSIONDRIVE_DEBUG_CONTROL=1 \
+    DIFFUSIONDRIVE_DEBUG_ROUTE=1 \
+    DIFFUSIONDRIVE_DEBUG_SAFETY_BOX=1 \
+    DIFFUSIONDRIVE_DEBUG_INTERVAL=10
