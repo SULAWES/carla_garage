@@ -44,6 +44,9 @@
   - `DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD`
   - `DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD`
   - `DIFFUSIONDRIVE_LOW_SPEED_STEER`
+  - `DIFFUSIONDRIVE_STUCK_THRESHOLD`
+  - `DIFFUSIONDRIVE_CREEP_DURATION`
+  - `DIFFUSIONDRIVE_CREEP_THROTTLE`
   - `DIFFUSIONDRIVE_DEBUG_CONTROL`
   - `DIFFUSIONDRIVE_DEBUG_INTERVAL`
 - 实例化 `V2TransfuserModel`
@@ -174,6 +177,8 @@
 旧 time-index desired speed 逻辑仍可通过 `DIFFUSIONDRIVE_SPATIAL_PID=0` 启用。默认空间 PID 的速度估计只是一版保守闭环控制启发式；其 fast / slow speed 和 turn-ratio 阈值可通过 `DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST`、`DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW`、`DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD`、`DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD` 做闭环 A/B 覆盖。后续仍建议通过 CARLA / Bench2Drive 闭环评测调参，或改为显式 speed head。
 
 默认情况下，低速近似静止或 brake 激活时会把横向控制 angle 清零，以避免停车状态下抖动。闭环 A/B 可设置 `DIFFUSIONDRIVE_LOW_SPEED_STEER=1`，使 agent 在 `speed < 0.01` 且未 brake 时仍保留预测轨迹对应的转向；brake 激活时仍会清零转向。该开关用于诊断低速起步直行导致的 route deviation，不改变默认 baseline 行为。
+
+stuck recovery 也支持闭环 A/B 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD` 控制低速累计多少 tick 后触发 forced creep，`DIFFUSIONDRIVE_CREEP_DURATION` 控制每次 creep 持续 tick 数，`DIFFUSIONDRIVE_CREEP_THROTTLE` 控制 forced creep 的最小 throttle。未设置时使用 `GlobalConfig` 默认值。
 
 也就是说，这个 agent 当前不是“直接输出控制量”，而是“输出轨迹，再用经典控制器执行”。
 

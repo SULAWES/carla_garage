@@ -11,6 +11,9 @@ Env vars:
   - DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD: override turn-ratio slowdown threshold.
   - DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD: override full-slowdown turn-ratio threshold.
   - DIFFUSIONDRIVE_LOW_SPEED_STEER: keep steering active at near-zero speed unless braking (default: 0).
+  - DIFFUSIONDRIVE_STUCK_THRESHOLD: override stuck detector threshold.
+  - DIFFUSIONDRIVE_CREEP_DURATION: override forced creep duration once stuck.
+  - DIFFUSIONDRIVE_CREEP_THROTTLE: override forced creep throttle.
   - DIFFUSIONDRIVE_DEBUG_CONTROL: print low-frequency control diagnostics (default: 0).
   - DIFFUSIONDRIVE_DEBUG_INTERVAL: control diagnostic print interval in steps (default: 20).
 """
@@ -65,6 +68,16 @@ def env_float(name, default):
         raise RuntimeError(f"{name} must be a float, got {value!r}.") from exc
 
 
+def env_int(name, default):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer, got {value!r}.") from exc
+
+
 class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
     """DiffusionDrive agent for CARLA leaderboard."""
 
@@ -115,6 +128,9 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.debug_control = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_CONTROL", "0"))
         self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
         self.low_speed_steer = strtobool(os.environ.get("DIFFUSIONDRIVE_LOW_SPEED_STEER", "0"))
+        self.config.stuck_threshold = env_int("DIFFUSIONDRIVE_STUCK_THRESHOLD", self.config.stuck_threshold)
+        self.config.creep_duration = env_int("DIFFUSIONDRIVE_CREEP_DURATION", self.config.creep_duration)
+        self.config.creep_throttle = env_float("DIFFUSIONDRIVE_CREEP_THROTTLE", self.config.creep_throttle)
         print("DiffusionDrive command delay:", self.use_command_delay)
         print("DiffusionDrive spatial PID:", self.use_spatial_pid)
         print(
@@ -125,6 +141,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"sharp_turn_threshold={self.config.diffusiondrive_spatial_pid_sharp_turn_threshold}"
         )
         print("DiffusionDrive low-speed steer:", self.low_speed_steer)
+        print(
+            "DiffusionDrive stuck recovery params: "
+            f"stuck_threshold={self.config.stuck_threshold}, "
+            f"creep_duration={self.config.creep_duration}, "
+            f"creep_throttle={self.config.creep_throttle}"
+        )
         print("DiffusionDrive control debug:", self.debug_control)
 
         # DiffusionDrive model config

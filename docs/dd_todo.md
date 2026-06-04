@@ -349,7 +349,9 @@
 ## 建议的推进顺序
 
 1. 基于已完成的 baseline-basic 220 条闭环结果，优先分析 route deviation、blocked、低速和 collisions 的具体触发场景。
-2. 做闭环 A/B：`DIFFUSIONDRIVE_COMMAND_DELAY`、`DIFFUSIONDRIVE_LOW_SPEED_STEER`、空间 PID env 覆盖参数、stuck / creep / safety box 阈值，并保持 `STOP_CONTROL=0` 作为 sensor-only 主线。
+2. 做闭环 A/B：`DIFFUSIONDRIVE_COMMAND_DELAY`、`DIFFUSIONDRIVE_LOW_SPEED_STEER`、空间 PID env 覆盖参数、stuck / creep env 覆盖参数、safety box 阈值，并保持 `STOP_CONTROL=0` 作为 sensor-only 主线。
+
+注意：早期命名为 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 的 20-route ablation 是在 `DIFFUSIONDRIVE_STUCK_THRESHOLD` 尚未被代码读取时跑出的，不能解释为 stuck threshold 对比，只能作为重复运行 / 随机性参考。后续需要同步支持 env 覆盖的 agent 后重新跑 stuck threshold A/B。
 3. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
 4. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap，判断是否需要推理 sensor contract 对齐或 finetune。
 5. 再考虑是否利用辅助头、显式 speed/control head、闭环导向数据增强或持续学习方法。
