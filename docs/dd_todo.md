@@ -161,12 +161,14 @@
 - `safety_box_*` 阈值是否过紧或过松
 - `stuck_threshold` / `creep_duration` 是否适合当前 route 分布
 - creep 是否会在跟车、红灯起步或贴近障碍物时误触发
+- creep 不能只从 leaderboard aggregate 指标判断，需要同时统计 `Detected agent being stuck` 和 `Creeping stopped by safety box` 日志
 
 **建议**：
 
 - 用简单 route 先做闭环验证
 - 单独记录 creep 触发次数和 emergency stop 次数
 - 根据实测结果微调 `safety_box_*`、`stuck_threshold`、`creep_duration`
+- 当前 20-route 结果显示，单独调 stuck threshold 不如空间 PID 速度参数有效；后续优先做 `speed_fast / speed_slow` 插值实验，并保留 creep / safety-box 触发计数作为辅助指标
 
 ---
 
@@ -351,10 +353,11 @@
 1. 基于已完成的 baseline-basic 220 条闭环结果，优先分析 route deviation、blocked、低速和 collisions 的具体触发场景。
 2. 做闭环 A/B：`DIFFUSIONDRIVE_COMMAND_DELAY`、`DIFFUSIONDRIVE_LOW_SPEED_STEER`、空间 PID env 覆盖参数、stuck / creep env 覆盖参数、safety box 阈值，并保持 `STOP_CONTROL=0` 作为 sensor-only 主线。
 
-注意：早期命名为 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 的 20-route ablation 是在 `DIFFUSIONDRIVE_STUCK_THRESHOLD` 尚未被代码读取时跑出的，不能解释为 stuck threshold 对比，只能作为重复运行 / 随机性参考。后续需要同步支持 env 覆盖的 agent 后重新跑 stuck threshold A/B。
-3. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
-4. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap，判断是否需要推理 sensor contract 对齐或 finetune。
-5. 再考虑是否利用辅助头、显式 speed/control head、闭环导向数据增强或持续学习方法。
+注意：早期命名为 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 的 20-route ablation 是在 `DIFFUSIONDRIVE_STUCK_THRESHOLD` 尚未被代码读取时跑出的，不能解释为 stuck threshold 对比，只能作为重复运行 / 随机性参考。后续 `_real` 后缀重跑已经有效：`A5_stuck120_real` / `A6_stuck170_real` / `A7_stuck300_real` 表明单独调 stuck threshold 不是主要突破口，`A8_pid_6_2p5` 和 `A9_pid_7_3` 的空间 PID 速度参数收益更明显。
+3. 对当前最佳 20-route 结果继续做小步插值：优先测试 `speed_fast=6.5, speed_slow=2.75` 以及 `speed_fast=7.0, speed_slow=2.5`，观察能否保留 A9 的低 min-speed penalty，同时降低 collision / timeout。
+4. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
+5. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap，判断是否需要推理 sensor contract 对齐或 finetune。
+6. 再考虑是否利用辅助头、显式 speed/control head、闭环导向数据增强或持续学习方法。
 
 ---
 

@@ -37,6 +37,17 @@
   - `DIFFUSIONDRIVE_ANCHOR_PATH`
   - `DIFFUSIONDRIVE_CHECKPOINT`
   - `DIFFUSIONDRIVE_BACKBONE_PATH`
+  - `DIFFUSIONDRIVE_CAMERA_FOV`
+  - `DIFFUSIONDRIVE_CAMERA_POS`
+  - `DIFFUSIONDRIVE_CAMERA_ROT`
+  - `DIFFUSIONDRIVE_CAMERA_WIDTH`
+  - `DIFFUSIONDRIVE_CAMERA_HEIGHT`
+  - `DIFFUSIONDRIVE_LIDAR_POS`
+  - `DIFFUSIONDRIVE_LIDAR_ROT`
+  - `DIFFUSIONDRIVE_CROP_IMAGE`
+  - `DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT`
+  - `DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH`
+  - `DIFFUSIONDRIVE_ZERO_LIDAR`
   - `DIFFUSIONDRIVE_COMMAND_DELAY`
   - `DIFFUSIONDRIVE_SPATIAL_PID`
   - `DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST`
@@ -48,11 +59,17 @@
   - `DIFFUSIONDRIVE_CREEP_DURATION`
   - `DIFFUSIONDRIVE_CREEP_THROTTLE`
   - `DIFFUSIONDRIVE_DEBUG_CONTROL`
+  - `DIFFUSIONDRIVE_DEBUG_ROUTE`
+  - `DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN`
+  - `DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG`
+  - `DIFFUSIONDRIVE_DEBUG_SAFETY_BOX`
   - `DIFFUSIONDRIVE_DEBUG_INTERVAL`
 - 实例化 `V2TransfuserModel`
 - 加载 checkpoint
 - 初始化 PID 控制器
 - 初始化 UKF、状态缓存、LiDAR buffer
+
+sensor / model override 的应用顺序是：先创建 `GlobalConfig()`，然后立即应用 camera / LiDAR / crop override，再构造 `CARLA_Data` 和 `dd_config`；model image size override 在构建 `V2TransfuserModel` 前写入 `dd_config` 并重新计算 patch / anchor 相关字段。这个顺序保证 `sensors()`、图像预处理、LiDAR histogram 和模型输入 shape 尽量使用同一套运行时配置。
 
 补充说明：
 
@@ -180,6 +197,10 @@
 
 stuck recovery 也支持闭环 A/B 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD` 控制低速累计多少 tick 后触发 forced creep，`DIFFUSIONDRIVE_CREEP_DURATION` 控制每次 creep 持续 tick 数，`DIFFUSIONDRIVE_CREEP_THROTTLE` 控制 forced creep 的最小 throttle。未设置时使用 `GlobalConfig` 默认值。
 
+creep 本身不是 Bench2Drive leaderboard 的独立指标。日志中 `Detected agent being stuck` 表示 forced creep 正在给最小 throttle；`Creeping stopped by safety box` 表示 creep 已触发但前方 LiDAR safety box 非空，因此被 emergency stop 拦下。分析闭环时需要把这两类日志和 `MinSpeedTest`、`AgentBlockedTest`、timeout 一起看。
+
+推理侧还支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，在模型输入处把 LiDAR BEV 置零。这个开关只用于诊断 LiDAR BEV / safety-box 相关 domain gap，不应直接作为 sensor-only baseline 主结果。
+
 也就是说，这个 agent 当前不是“直接输出控制量”，而是“输出轨迹，再用经典控制器执行”。
 
 ### 3.7 控制调试日志
@@ -188,10 +209,16 @@ stuck recovery 也支持闭环 A/B 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD` 控
 
 ```bash
 export DIFFUSIONDRIVE_DEBUG_CONTROL=1
+export DIFFUSIONDRIVE_DEBUG_ROUTE=1
+export DIFFUSIONDRIVE_DEBUG_SAFETY_BOX=1
 export DIFFUSIONDRIVE_DEBUG_INTERVAL=20
 ```
 
-日志会按 step 间隔打印当前 / delayed / 实际使用 command、PID mode、desired speed、turn ratio、endpoint distance、aim waypoint、angle / raw angle / reset reason、low-speed steer 开关、最终 control、stuck / force_move / stop sign 状态。默认关闭，避免长跑日志过噪。
+`DIFFUSIONDRIVE_DEBUG_CONTROL` 会按 step 间隔打印当前 / delayed / 实际使用 command、PID mode、desired speed、turn ratio、endpoint distance、aim waypoint、angle / raw angle / reset reason、low-speed steer 开关、最终 control、stuck / force_move / stop sign 状态。
+
+`DIFFUSIONDRIVE_DEBUG_ROUTE` 会打印预测 aim point 到当前 route polyline 的最近距离、方向角差、最近 route segment 和 warning 标志，用于判断 route deviation 是预测轨迹偏离、控制执行偏离，还是 route 本身较难跟随。warning 阈值可用 `DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN` 和 `DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG` 覆盖。
+
+`DIFFUSIONDRIVE_DEBUG_SAFETY_BOX` 只在 forced creep 或 `Creeping stopped by safety box` 事件附近打印 safety-box 点数、最近点、x/y/z 范围、ego speed、desired speed、throttle / brake、stuck / force_move 和 route debug 摘要，用于区分真障碍、近场点云误触发和低速控制问题。默认关闭，避免长跑日志过噪。
 
 远端闭环运行时需要同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`。新版 agent 会读取 `GlobalConfig.diffusiondrive_spatial_pid*` 参数；如果只同步 agent 而没有同步 config，setup 阶段会报 `GlobalConfig` 缺少 `diffusiondrive_spatial_pid`。
 

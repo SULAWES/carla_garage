@@ -372,3 +372,51 @@ baseline-basic 训练完成后，已完成 full-scenario 开环诊断和 Bench2D
 4. 闭环评测使用 sensor-only 协议，默认 `STOP_CONTROL=0`；如果显式开启 `STOP_CONTROL=1`，结果必须标注为 privileged stop-sign ablation。
 5. 部分 route 曾在前几秒因 `filterpy` UKF covariance 非正定触发 `numpy.linalg.LinAlgError`，现已在 `DiffusionDriveAgent` 加入 `P` 对称化 / jitter / measurement reset 保护；后续遇到 `[DiffusionDriveUKF] reset` 日志时应按定位滤波重置记录，不再视作模型预测失败。
 6. 闭环结果 skip 逻辑不能只看 `status=Failed`。正常完成但驾驶失败的 route 也可能是 `Failed`，应以 `_checkpoint.progress`、records 是否存在、以及是否属于 setup/crash 类状态判断。
+
+## baseline-basic 20-route closed-loop ablations
+
+为定位 full baseline-basic 的闭环失败原因，已在一组约 20 条代表 route 上做小规模闭环 A/B。结果已同步到本地：
+
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_basic/ablation_20routes/
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/baseline_basic_ablation_20routes_summary.csv
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/baseline_basic_ablation_20routes_creep_summary.csv
+```
+
+有效实验摘要：
+
+| Experiment | Main setting | DS | RC | NDS | Completed / Perfect | Deviated | Blocked | Timeout |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `A0_baseline` | default sensor-only baseline | 37.6321 | 76.1615 | 25.8009 | 6 / 0 | 6 | 7 | 1 |
+| `A5_stuck120_real` | `DIFFUSIONDRIVE_STUCK_THRESHOLD=120` | 39.0805 | 77.8525 | 28.5186 | 6 / 0 | 4 | 10 | 0 |
+| `A6_stuck170_real` | `DIFFUSIONDRIVE_STUCK_THRESHOLD=170` | 39.6621 | 75.2455 | 28.8684 | 6 / 0 | 9 | 5 | 0 |
+| `A7_stuck300_real` | `DIFFUSIONDRIVE_STUCK_THRESHOLD=300` | 40.3743 | 75.9430 | 29.2390 | 6 / 0 | 8 | 4 | 2 |
+| `A8_pid_6_2p5` | `SPATIAL_PID_SPEED_FAST=6.0`, `SPATIAL_PID_SPEED_SLOW=2.5` | 42.9973 | 78.6635 | 34.0060 | 9 / 0 | 5 | 5 | 1 |
+| `A9_pid_7_3` | `SPATIAL_PID_SPEED_FAST=7.0`, `SPATIAL_PID_SPEED_SLOW=3.0` | 46.0220 | 77.2035 | 35.7785 | 7 / 1 | 4 | 6 | 2 |
+
+当前判断：
+
+1. 空间 PID 速度参数是目前最明显的正向调参方向。`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` 的 DS/NDS 最高但 vehicle collision 和 timeout 风险更高。
+2. 单独调 stuck threshold 不够稳定：`120` 增加 blocked，`170` 将 blocked 交换成 deviation，`300` 引入 timeout。
+3. 早期 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 是在 `DIFFUSIONDRIVE_STUCK_THRESHOLD` 尚未被 agent 读取时跑出的，不能作为 stuck-threshold 结论；只有 `_real` 后缀的重跑结果有效。
+4. route `167`、`185`、`102` 在 A8/A9 下提升明显；`212`、`194`、`203`、`101` 是高速度 PID 下的主要退化 route，需要继续用 debug log 排查 route deviation / safety box / interaction。
+
+### Creep / safety-box 观测
+
+Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两类信号观察：
+
+- 间接指标：`MinSpeedTest`、`AgentBlockedTest`、timeout status 和 route completion。
+- 直接日志：`Detected agent being stuck` 表示 forced creep 真正给出最小 throttle；`Creeping stopped by safety box` 表示 force-move 已触发但前方 LiDAR safety box 非空，因此被强制停下。
+
+当前 20-route 日志计数：
+
+| Experiment | Routes with creep/safety signal | Forced creep ticks | Safety-box stop ticks |
+|---|---:|---:|---:|
+| `A0_baseline` | 8 | 795 | 21273 |
+| `A5_stuck120_real` | 12 | 5546 | 34588 |
+| `A6_stuck170_real` | 9 | 1202 | 24837 |
+| `A7_stuck300_real` | 10 | 1591 | 29213 |
+| `A8_pid_6_2p5` | 8 | 1343 | 16186 |
+| `A9_pid_7_3` | 8 | 4623 | 16326 |
+
+这说明 creeping 在上述实验中确实有体现，但不应只从 aggregate DS/RC 推断。A8/A9 明显减少了 safety-box stop loops，但 A9 在个别 route 上有更多实际 forced creep ticks；后续如果继续调闭环，应把 creep/safety-box 触发次数作为独立 debug 指标记录。

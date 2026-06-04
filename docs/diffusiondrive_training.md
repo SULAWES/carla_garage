@@ -94,6 +94,23 @@ load_file=""
 
 这组结果说明 full baseline-basic 在开环轨迹误差上很强，但闭环仍是弱 baseline，后续持续学习或控制改进需要以闭环 failure modes 为主要诊断对象。
 
+### 20-route closed-loop ablations
+
+baseline-basic 后续已完成一组 20-route 闭环 A/B，用于初步定位控制侧 failure modes。结果归档在：
+
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_basic/ablation_20routes/
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/baseline_basic_ablation_20routes_summary.csv
+/home/HeavenlySU/sitp_workspace/dd_logs/eval_summaries/baseline_basic_ablation_20routes_creep_summary.csv
+```
+
+当前结论：
+
+- 空间 PID 速度参数是最明显的正向调参方向。`A8_pid_6_2p5` 更均衡：`DS=42.9973`、`RC=78.6635`、`NDS=34.0060`；`A9_pid_7_3` 分数最高：`DS=46.0220`、`RC=77.2035`、`NDS=35.7785`，但 collision 和 timeout 风险更高。
+- 单独调 stuck threshold 不够稳定：`A5_stuck120_real` blocked 增加，`A6_stuck170_real` 将 blocked 换成 route deviation，`A7_stuck300_real` 引入 timeout。
+- 早期 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 不是有效 stuck-threshold A/B，因为当时 agent 尚未读取 `DIFFUSIONDRIVE_STUCK_THRESHOLD`；只使用 `_real` 后缀结果做 stuck 结论。
+- creeping 不在 leaderboard 中作为独立指标出现，需要结合日志中 `Detected agent being stuck` / `Creeping stopped by safety box` 与 `MinSpeedTest`、`AgentBlockedTest`、timeout 一起分析。A8/A9 减少 safety-box stop loops，但 A9 在个别 route 上实际 forced creep ticks 更多。
+
 ## Status Feature 与 Extra Sensors
 
 当前 DiffusionDrive 训练入口使用 `7` 维 `status_feature`：
@@ -422,8 +439,10 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
 - 推理侧新增 `DIFFUSIONDRIVE_LOW_SPEED_STEER=1` 闭环 A/B 开关：低速近似静止但未 brake 时保留横向 PID angle，默认 `0` 以保持 baseline 行为；该开关用于验证低速起步直行是否导致 route deviation。
 - stuck recovery 已支持 env 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD`、`DIFFUSIONDRIVE_CREEP_DURATION`、`DIFFUSIONDRIVE_CREEP_THROTTLE`；未设置时继续使用 `GlobalConfig` 默认值。
+- 推理侧已支持在线 sensor / model override：`DIFFUSIONDRIVE_CAMERA_FOV`、`DIFFUSIONDRIVE_CAMERA_POS`、`DIFFUSIONDRIVE_CAMERA_ROT`、`DIFFUSIONDRIVE_CAMERA_WIDTH`、`DIFFUSIONDRIVE_CAMERA_HEIGHT`、`DIFFUSIONDRIVE_LIDAR_POS`、`DIFFUSIONDRIVE_LIDAR_ROT`、`DIFFUSIONDRIVE_CROP_IMAGE`、`DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT`、`DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH`。这些只影响 closed-loop online agent；训练侧 crop / camera metadata CLI 仍需后续补齐。
+- 推理侧已支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，用于把模型 LiDAR BEV 输入置零做诊断性 ablation；该结果不应直接作为正式 baseline。
 - 推理侧 UKF 已加入 covariance 正定保护和 measurement reset，避免 `filterpy` 在 `P` 非正定时直接导致 agent crash。
-- 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、angle reset、control、stuck / force_move / stop sign。
+- 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、angle reset、control、stuck / force_move / stop sign。若排查 route deviation 或 creep / safety-box，可额外打开 `DIFFUSIONDRIVE_DEBUG_ROUTE=1`、`DIFFUSIONDRIVE_DEBUG_SAFETY_BOX=1`；route warning 阈值可用 `DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN`、`DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG` 调整。
 - 远端闭环 A/B 前必须同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`；新版 agent 依赖 `GlobalConfig.diffusiondrive_spatial_pid*` 默认参数。
 - 已支持 `torchrun` / DDP 多卡训练；暂不支持 AMP / EMA。
 - 暂不训练 auxiliary heads。

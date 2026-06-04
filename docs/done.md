@@ -1,6 +1,6 @@
 # 已完成工作记录
 
-**更新日期**: 2026-06-02
+**更新日期**: 2026-06-04
 
 本文档只记录已经完成的工作，详细问题分析见 `docs/lidar_bev_alignment_issues.md`，后续事项见 `docs/dd_todo.md`。
 
@@ -14,6 +14,7 @@
 - 已整理运行方式、工程注意事项和 agent 解释文档，包括 `docs/diffusiondrive_run.md`、`docs/engineering.md`、`docs/diffusiondrive_agent_explained.md`。
 - 已完成 full baseline-basic 训练：4 卡 L40 / DDP、B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU batch 64、`lr=6e-4`、`image_encoder_lr_mult=0.5`。
 - 已完成 baseline-basic full-scenario open-loop 汇总和 Bench2Drive 220 sensor-only closed-loop 汇总，并下载到本地 `dd_logs` 镜像路径。
+- 已完成 baseline-basic 20-route 闭环 A/B 初筛，并将结果同步到 `dd_logs/eval_summaries/baseline_basic_ablation_20routes_summary.csv` 与 `baseline_basic_ablation_20routes_creep_summary.csv`。
 
 ## 运行时功能补齐
 
@@ -30,6 +31,7 @@
 - Closed-loop Bench2Drive 220：`DS=44.8074`、`RC=79.4774`、`NDS=35.5193`。
 - Closed-loop status：`Completed=118`、`Perfect=1`、`Failed - Agent deviated from the route=69`、`Failed - Agent got blocked=27`、`Failed - Agent timed out=5`。
 - 当前结论：baseline-basic 开环轨迹误差很低，但闭环仍是弱 baseline，主要失败模式是 route deviation、blocked、低速和 collisions。
+- 20-route A/B 当前结论：空间 PID speed tuning 是最明显正向方向；`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` 的 DS/NDS 最高但 collision / timeout 风险更高。单独调 stuck threshold 不够稳定，creep / safety-box 需要单独用日志计数观察。
 
 ## LiDAR 时序与对齐
 

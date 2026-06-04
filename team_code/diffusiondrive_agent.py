@@ -4,6 +4,14 @@ Env vars:
   - DIFFUSIONDRIVE_CHECKPOINT: path to model weights (.pth/.ckpt).
   - DIFFUSIONDRIVE_ANCHOR_PATH: path to plan anchor .npy file (required).
   - DIFFUSIONDRIVE_BACKBONE_PATH: optional timm backbone weights.
+  - DIFFUSIONDRIVE_CAMERA_FOV: override online front camera FOV.
+  - DIFFUSIONDRIVE_CAMERA_POS: override online front camera position, "x,y,z".
+  - DIFFUSIONDRIVE_CAMERA_ROT: override online front camera rotation, "roll,pitch,yaw".
+  - DIFFUSIONDRIVE_CAMERA_WIDTH / DIFFUSIONDRIVE_CAMERA_HEIGHT: override online camera resolution.
+  - DIFFUSIONDRIVE_LIDAR_POS / DIFFUSIONDRIVE_LIDAR_ROT: override online LiDAR pose, "x,y,z".
+  - DIFFUSIONDRIVE_CROP_IMAGE: override image crop flag (0/1).
+  - DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT / DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH: override model input size.
+  - DIFFUSIONDRIVE_ZERO_LIDAR: replace LiDAR BEV with zeros for diagnostic ablation (default: 0).
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
   - DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST: override spatial PID fast target speed.
@@ -15,6 +23,10 @@ Env vars:
   - DIFFUSIONDRIVE_CREEP_DURATION: override forced creep duration once stuck.
   - DIFFUSIONDRIVE_CREEP_THROTTLE: override forced creep throttle.
   - DIFFUSIONDRIVE_DEBUG_CONTROL: print low-frequency control diagnostics (default: 0).
+  - DIFFUSIONDRIVE_DEBUG_ROUTE: print route-corridor diagnostics (default: 0).
+  - DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN: route debug distance warning threshold in meters (default: 3.0).
+  - DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG: route debug angle warning threshold in degrees (default: 45.0).
+  - DIFFUSIONDRIVE_DEBUG_SAFETY_BOX: print structured safety-box diagnostics (default: 0).
   - DIFFUSIONDRIVE_DEBUG_INTERVAL: control diagnostic print interval in steps (default: 20).
 """
 
@@ -78,6 +90,19 @@ def env_int(name, default):
         raise RuntimeError(f"{name} must be an integer, got {value!r}.") from exc
 
 
+def env_float_list(name, default, length):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return list(default)
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != length:
+        raise RuntimeError(f"{name} must contain {length} comma-separated floats, got {value!r}.")
+    try:
+        return [float(part) for part in parts]
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must contain {length} comma-separated floats, got {value!r}.") from exc
+
+
 class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
     """DiffusionDrive agent for CARLA leaderboard."""
 
@@ -94,7 +119,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         # CARLA config for sensors and control
         self.config = GlobalConfig()
-        self.data = CARLA_Data(root=[], config=self.config, shared_dict=None)
+        self._apply_runtime_sensor_overrides()
         self.apply_jpeg_artifact = strtobool(os.environ.get("DIFFUSIONDRIVE_JPEG_ARTIFACT", "1"))
         self.image_normalization = os.environ.get("DIFFUSIONDRIVE_IMAGE_NORMALIZATION", "none").lower()
         if self.image_normalization not in ("none", "imagenet"):
@@ -102,8 +127,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                 "DIFFUSIONDRIVE_IMAGE_NORMALIZATION must be one of: none, imagenet; "
                 f"got {self.image_normalization}."
             )
+        self.data = CARLA_Data(root=[], config=self.config, shared_dict=None)
         print("Use JPEG artifact in DiffusionDrive image preprocessing:", self.apply_jpeg_artifact)
         print("DiffusionDrive image normalization:", self.image_normalization)
+        self.zero_lidar = strtobool(os.environ.get("DIFFUSIONDRIVE_ZERO_LIDAR", "0"))
         self.use_command_delay = strtobool(os.environ.get("DIFFUSIONDRIVE_COMMAND_DELAY", "0"))
         self.use_spatial_pid = strtobool(os.environ.get(
             "DIFFUSIONDRIVE_SPATIAL_PID",
@@ -126,7 +153,11 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             self.config.diffusiondrive_spatial_pid_sharp_turn_threshold,
         )
         self.debug_control = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_CONTROL", "0"))
+        self.debug_route = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_ROUTE", "0"))
+        self.debug_safety_box = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_SAFETY_BOX", "0"))
         self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
+        self.route_debug_distance_warn = env_float("DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN", 3.0)
+        self.route_debug_angle_warn = env_float("DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG", 45.0)
         self.low_speed_steer = strtobool(os.environ.get("DIFFUSIONDRIVE_LOW_SPEED_STEER", "0"))
         self.config.stuck_threshold = env_int("DIFFUSIONDRIVE_STUCK_THRESHOLD", self.config.stuck_threshold)
         self.config.creep_duration = env_int("DIFFUSIONDRIVE_CREEP_DURATION", self.config.creep_duration)
@@ -148,10 +179,14 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"creep_throttle={self.config.creep_throttle}"
         )
         print("DiffusionDrive control debug:", self.debug_control)
+        print("DiffusionDrive route debug:", self.debug_route)
+        print("DiffusionDrive safety-box debug:", self.debug_safety_box)
+        print("DiffusionDrive zero LiDAR:", self.zero_lidar)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
         self.dd_config = build_diffusiondrive_config(self.config, dd_overrides)
+        self._apply_runtime_model_overrides()
 
         # Build model
         self.model = V2TransfuserModel(self.dd_config).to(self.device)
@@ -210,6 +245,72 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         # Temporal LiDAR buffer for multi-frame processing
         self.lidar_buffer = deque(maxlen=self.config.lidar_seq_len * self.config.data_save_freq)
         self.lidar_last = None
+
+        self.last_route_debug = {}
+        self.last_safety_box_debug = {}
+
+    def _apply_runtime_sensor_overrides(self) -> None:
+        """Apply online sensor/preprocessing overrides before data/model setup."""
+        self.config.camera_fov = env_float("DIFFUSIONDRIVE_CAMERA_FOV", self.config.camera_fov)
+        self.config.camera_pos = env_float_list("DIFFUSIONDRIVE_CAMERA_POS", self.config.camera_pos, 3)
+        self.config.camera_rot_0 = env_float_list("DIFFUSIONDRIVE_CAMERA_ROT", self.config.camera_rot_0, 3)
+        self.config.camera_width = env_int("DIFFUSIONDRIVE_CAMERA_WIDTH", self.config.camera_width)
+        self.config.camera_height = env_int("DIFFUSIONDRIVE_CAMERA_HEIGHT", self.config.camera_height)
+        self.config.lidar_pos = env_float_list("DIFFUSIONDRIVE_LIDAR_POS", self.config.lidar_pos, 3)
+        self.config.lidar_rot = env_float_list("DIFFUSIONDRIVE_LIDAR_ROT", self.config.lidar_rot, 3)
+        if self.config.camera_width <= 0 or self.config.camera_height <= 0:
+            raise RuntimeError(
+                "DIFFUSIONDRIVE_CAMERA_WIDTH/HEIGHT must be positive; "
+                f"got {self.config.camera_width}x{self.config.camera_height}."
+            )
+
+        crop_value = os.environ.get("DIFFUSIONDRIVE_CROP_IMAGE")
+        if crop_value is not None and crop_value != "":
+            self.config.crop_image = strtobool(crop_value)
+        self._refresh_global_config_image_anchors()
+
+        print(
+            "DiffusionDrive sensor config: "
+            f"camera_size={self.config.camera_width}x{self.config.camera_height}, "
+            f"camera_fov={self.config.camera_fov}, "
+            f"camera_pos={self.config.camera_pos}, "
+            f"camera_rot={self.config.camera_rot_0}, "
+            f"crop_image={self.config.crop_image}, "
+            f"cropped_size={self.config.cropped_width}x{self.config.cropped_height}, "
+            f"lidar_pos={self.config.lidar_pos}, "
+            f"lidar_rot={self.config.lidar_rot}",
+            flush=True,
+        )
+
+    def _refresh_global_config_image_anchors(self) -> None:
+        if self.config.crop_image:
+            self.config.img_vert_anchors = self.config.cropped_height // 32
+            self.config.img_horz_anchors = self.config.cropped_width // 32
+        else:
+            self.config.img_vert_anchors = self.config.camera_height // 32
+            self.config.img_horz_anchors = self.config.camera_width // 32
+
+    def _apply_runtime_model_overrides(self) -> None:
+        model_height = env_int("DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT", self.dd_config.camera_height)
+        model_width = env_int("DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH", self.dd_config.camera_width)
+        if model_height <= 0 or model_width <= 0:
+            raise RuntimeError(
+                "DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT/WIDTH must be positive; "
+                f"got {model_height}x{model_width}."
+            )
+        if model_height % 32 != 0 or model_width % 32 != 0:
+            raise RuntimeError(
+                "DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT/WIDTH must be divisible by 32; "
+                f"got {model_height}x{model_width}."
+            )
+        self.dd_config.camera_height = model_height
+        self.dd_config.camera_width = model_width
+        self.dd_config.__post_init__()
+        print(
+            "DiffusionDrive model image size: "
+            f"{self.dd_config.camera_width}x{self.dd_config.camera_height}",
+            flush=True,
+        )
 
     def _load_checkpoint(self, ckpt_path: str) -> None:
         if torch.cuda.is_available():
@@ -445,6 +546,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         result['gps'] = filtered_state[0:2]
 
         waypoint_route = self._route_planner.run_step(np.append(filtered_state[0:2], gps_pos[2]))
+        route_points_ego = []
+        for route_point, _ in list(waypoint_route)[:20]:
+            route_points_ego.append(
+                t_u.inverse_conversion_2d(route_point[:2], result['gps'], result['compass'])
+            )
+        result['route_points_ego'] = np.asarray(route_points_ego, dtype=np.float32)
         if len(waypoint_route) > 2:
             target_point, far_command = waypoint_route[1]
             target_point_next, _ = waypoint_route[2]
@@ -505,7 +612,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
     def _build_status(self, tick_data):
         return build_status_feature(tick_data['command'], tick_data['speed'], device=self.device)
 
-    def _control_pid(self, waypoints, speed):
+    def _control_pid(self, waypoints, speed, route_points_ego=None):
         waypoints = waypoints[0].detach().cpu().numpy()
         speed = float(speed)
 
@@ -555,6 +662,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         steer = self.turn_controller.step(angle)
         steer = np.clip(steer, -1.0, 1.0)
+        self.last_route_debug = self._compute_route_debug(aim, route_points_ego)
 
         self.last_pid_debug = {
             "mode": pid_mode,
@@ -601,6 +709,79 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         speed_slow = self.config.diffusiondrive_spatial_pid_speed_slow
         return float(speed_fast * (1.0 - turn_slowdown) + speed_slow * turn_slowdown)
 
+    def _compute_route_debug(self, aim, route_points_ego):
+        if route_points_ego is None:
+            return {"available": False}
+
+        route_points = np.asarray(route_points_ego, dtype=np.float64)
+        if route_points.ndim != 2 or route_points.shape[0] == 0 or route_points.shape[1] < 2:
+            return {"available": False}
+        route_points = route_points[:, :2]
+        finite_mask = np.isfinite(route_points).all(axis=1)
+        route_points = route_points[finite_mask]
+        if route_points.shape[0] == 0:
+            return {"available": False}
+
+        aim = np.asarray(aim, dtype=np.float64)[:2]
+        if not np.all(np.isfinite(aim)):
+            return {"available": False}
+
+        if route_points.shape[0] == 1:
+            nearest = route_points[0]
+            distance = float(np.linalg.norm(aim - nearest))
+            angle_diff_deg = float("nan")
+            tangent = np.array([float("nan"), float("nan")], dtype=np.float64)
+            segment_index = 0
+        else:
+            starts = route_points[:-1]
+            ends = route_points[1:]
+            segments = ends - starts
+            denom = np.sum(segments * segments, axis=1)
+            valid = denom > 1e-8
+            if not np.any(valid):
+                nearest_index = int(np.argmin(np.linalg.norm(route_points - aim[None, :], axis=1)))
+                nearest = route_points[nearest_index]
+                distance = float(np.linalg.norm(aim - nearest))
+                angle_diff_deg = float("nan")
+                tangent = np.array([float("nan"), float("nan")], dtype=np.float64)
+                segment_index = nearest_index
+            else:
+                starts_valid = starts[valid]
+                segments_valid = segments[valid]
+                denom_valid = denom[valid]
+                projection = np.sum((aim[None, :] - starts_valid) * segments_valid, axis=1) / denom_valid
+                projection = np.clip(projection, 0.0, 1.0)
+                nearest_candidates = starts_valid + projection[:, None] * segments_valid
+                distances = np.linalg.norm(nearest_candidates - aim[None, :], axis=1)
+                valid_indices = np.flatnonzero(valid)
+                best_valid_index = int(np.argmin(distances))
+                nearest = nearest_candidates[best_valid_index]
+                distance = float(distances[best_valid_index])
+                segment_index = int(valid_indices[best_valid_index])
+                tangent = segments[segment_index]
+                aim_angle = math.atan2(float(aim[1]), float(aim[0]))
+                route_angle = math.atan2(float(tangent[1]), float(tangent[0]))
+                angle_diff_deg = abs(math.degrees(t_u.normalize_angle(aim_angle - route_angle)))
+
+        warning = bool(
+            distance > self.route_debug_distance_warn or
+            (np.isfinite(angle_diff_deg) and angle_diff_deg > self.route_debug_angle_warn)
+        )
+        return {
+            "available": True,
+            "points": int(route_points.shape[0]),
+            "aim_x": float(aim[0]),
+            "aim_y": float(aim[1]),
+            "nearest_x": float(nearest[0]),
+            "nearest_y": float(nearest[1]),
+            "distance": float(distance),
+            "angle_diff_deg": float(angle_diff_deg),
+            "segment_index": int(segment_index),
+            "tangent_x": float(tangent[0]),
+            "tangent_y": float(tangent[1]),
+            "warning": warning,
+        }
+
     def _stop_sign_controller_step(self, ego_speed: float) -> bool:
         """Force a full stop when approaching a route-relevant stop sign."""
         if not self.stop_sign_controller or self.stop_sign_criteria is None or self.hero_actor is None:
@@ -632,6 +813,77 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             return False
 
         return True
+
+    def _filter_safety_box_points(self, lidar_points):
+        safety_box = lidar_points[lidar_points[..., 2] > self.config.safety_box_z_min]
+        safety_box = safety_box[safety_box[..., 2] < self.config.safety_box_z_max]
+        safety_box = safety_box[safety_box[..., 1] > self.config.safety_box_y_min]
+        safety_box = safety_box[safety_box[..., 1] < self.config.safety_box_y_max]
+        safety_box = safety_box[safety_box[..., 0] > self.config.safety_box_x_min]
+        safety_box = safety_box[safety_box[..., 0] < self.config.safety_box_x_max]
+        return safety_box
+
+    def _build_safety_box_debug(self, safety_box, speed, throttle_before, brake_before):
+        point_count = int(len(safety_box))
+        debug = {
+            "point_count": point_count,
+            "speed": float(speed),
+            "desired_speed": float(getattr(self, "last_pid_debug", {}).get("desired_speed", float("nan"))),
+            "throttle_before": float(throttle_before),
+            "brake_before": bool(brake_before),
+            "stuck_detector": int(self.stuck_detector),
+            "force_move": int(self.force_move),
+        }
+        if point_count == 0:
+            debug.update({
+                "nearest_xy": float("nan"),
+                "x_min": float("nan"),
+                "x_max": float("nan"),
+                "y_min": float("nan"),
+                "y_max": float("nan"),
+                "z_min": float("nan"),
+                "z_max": float("nan"),
+            })
+            return debug
+
+        xy_distance = np.linalg.norm(safety_box[:, :2], axis=1)
+        debug.update({
+            "nearest_xy": float(np.min(xy_distance)),
+            "x_min": float(np.min(safety_box[:, 0])),
+            "x_max": float(np.max(safety_box[:, 0])),
+            "y_min": float(np.min(safety_box[:, 1])),
+            "y_max": float(np.max(safety_box[:, 1])),
+            "z_min": float(np.min(safety_box[:, 2])),
+            "z_max": float(np.max(safety_box[:, 2])),
+        })
+        return debug
+
+    def _maybe_print_safety_box_debug(self, event):
+        if not self.debug_safety_box:
+            return
+
+        debug = getattr(self, "last_safety_box_debug", {})
+        route_debug = getattr(self, "last_route_debug", {})
+        print(
+            "[DiffusionDriveSafetyBox] "
+            f"event={event} "
+            f"step={self.step} "
+            f"points={debug.get('point_count', 0)} "
+            f"nearest_xy={debug.get('nearest_xy', float('nan')):.3f} "
+            f"x=[{debug.get('x_min', float('nan')):.3f},{debug.get('x_max', float('nan')):.3f}] "
+            f"y=[{debug.get('y_min', float('nan')):.3f},{debug.get('y_max', float('nan')):.3f}] "
+            f"z=[{debug.get('z_min', float('nan')):.3f},{debug.get('z_max', float('nan')):.3f}] "
+            f"speed={debug.get('speed', float('nan')):.3f} "
+            f"desired_speed={debug.get('desired_speed', float('nan')):.3f} "
+            f"throttle_before={debug.get('throttle_before', float('nan')):.3f} "
+            f"brake_before={debug.get('brake_before')} "
+            f"stuck={debug.get('stuck_detector')} "
+            f"force_move={debug.get('force_move')} "
+            f"route_dist={route_debug.get('distance', float('nan')):.3f} "
+            f"route_angle={route_debug.get('angle_diff_deg', float('nan')):.3f} "
+            f"route_warning={route_debug.get('warning')}",
+            flush=True,
+        )
 
     def align_lidar(self, lidar, x, y, orientation, x_target, y_target, orientation_target):
         """Align LiDAR from one coordinate frame to another."""
@@ -710,6 +962,8 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             lidar_bev.append(lidar_histogram)
 
         lidar_bev = torch.cat(lidar_bev, dim=1)
+        if self.zero_lidar:
+            lidar_bev = torch.zeros_like(lidar_bev)
 
         self.lidar_last = deepcopy(tick_data['lidar'])
 
@@ -729,7 +983,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         waypoints = traj
 
         speed = tick_data['speed'].item()
-        steer, throttle, brake = self._control_pid(waypoints, speed)
+        steer, throttle, brake = self._control_pid(waypoints, speed, tick_data.get('route_points_ego'))
         stop_for_stop_sign = self._stop_sign_controller_step(speed)
 
         # Restart mechanism in case the car got stuck.
@@ -745,28 +999,24 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             emergency_stop = False
 
             # Match sensor_agent creep protection using the latest full LiDAR scan.
-            safety_box = deepcopy(self.lidar_buffer[-1])
-
-            # z-axis
-            safety_box = safety_box[safety_box[..., 2] > self.config.safety_box_z_min]
-            safety_box = safety_box[safety_box[..., 2] < self.config.safety_box_z_max]
-
-            # y-axis
-            safety_box = safety_box[safety_box[..., 1] > self.config.safety_box_y_min]
-            safety_box = safety_box[safety_box[..., 1] < self.config.safety_box_y_max]
-
-            # x-axis
-            safety_box = safety_box[safety_box[..., 0] > self.config.safety_box_x_min]
-            safety_box = safety_box[safety_box[..., 0] < self.config.safety_box_x_max]
+            safety_box = self._filter_safety_box_points(deepcopy(self.lidar_buffer[-1]))
+            self.last_safety_box_debug = self._build_safety_box_debug(
+                safety_box=safety_box,
+                speed=speed,
+                throttle_before=throttle,
+                brake_before=brake,
+            )
             emergency_stop = (len(safety_box) > 0)
 
             if not emergency_stop:
                 print('Detected agent being stuck. Step: ', self.step)
+                self._maybe_print_safety_box_debug("creep")
                 throttle = max(self.config.creep_throttle, throttle)
                 brake = False
                 self.force_move -= 1
             else:
                 print('Creeping stopped by safety box. Step: ', self.step)
+                self._maybe_print_safety_box_debug("safety_stop")
                 throttle = 0.0
                 brake = True
                 self.force_move = self.config.creep_duration
@@ -783,6 +1033,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             self.control = control
 
         self._maybe_print_control_debug(speed, stop_for_stop_sign)
+        self._maybe_print_route_debug()
 
         return self.control
 
@@ -792,6 +1043,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         command_debug = getattr(self, "last_command_debug", {})
         pid_debug = getattr(self, "last_pid_debug", {})
+        route_debug = getattr(self, "last_route_debug", {})
         print(
             "[DiffusionDriveControl] "
             f"step={self.step} "
@@ -810,12 +1062,39 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"raw_angle={pid_debug.get('raw_angle', float('nan')):.3f} "
             f"angle_reset={pid_debug.get('angle_reset_reason')} "
             f"low_speed_steer={pid_debug.get('low_speed_steer')} "
+            f"route_dist={route_debug.get('distance', float('nan')):.3f} "
+            f"route_angle={route_debug.get('angle_diff_deg', float('nan')):.3f} "
+            f"route_warning={route_debug.get('warning')} "
             f"control=(steer={float(self.control.steer):.3f},"
             f"throttle={float(self.control.throttle):.3f},"
             f"brake={float(self.control.brake):.3f}) "
             f"stuck={self.stuck_detector} "
             f"force_move={self.force_move} "
             f"stop_sign={bool(stop_for_stop_sign)}"
+        )
+
+    def _maybe_print_route_debug(self):
+        if not self.debug_route or (self.step % self.debug_control_interval) != 0:
+            return
+
+        route_debug = getattr(self, "last_route_debug", {})
+        if not route_debug.get("available"):
+            print(f"[DiffusionDriveRoute] step={self.step} available=False", flush=True)
+            return
+
+        print(
+            "[DiffusionDriveRoute] "
+            f"step={self.step} "
+            f"points={route_debug.get('points')} "
+            f"aim=({route_debug.get('aim_x', float('nan')):.3f},"
+            f"{route_debug.get('aim_y', float('nan')):.3f}) "
+            f"nearest=({route_debug.get('nearest_x', float('nan')):.3f},"
+            f"{route_debug.get('nearest_y', float('nan')):.3f}) "
+            f"distance={route_debug.get('distance', float('nan')):.3f} "
+            f"angle_diff_deg={route_debug.get('angle_diff_deg', float('nan')):.3f} "
+            f"segment={route_debug.get('segment_index')} "
+            f"warning={route_debug.get('warning')}",
+            flush=True,
         )
 
     def _stabilize_ukf_covariance(self):

@@ -2,13 +2,14 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-06-02
+**更新日期**: 2026-06-04
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
 - 因此训练侧优先级高于继续对齐 navsim checkpoint 语义
 - full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - baseline-basic 开环 / 闭环结果已完成并下载到本地 `dd_logs` 镜像路径；open-loop six-scene `l1_mean=0.0092`，all-scenarios `l1_mean=0.0192`，Bench2Drive 220 closed-loop `DS=44.81`、`RC=79.48`、`NDS=35.52`
+- baseline-basic 已完成一组 20-route 闭环 A/B；当前最明显正向方向是空间 PID 速度参数，`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` DS/NDS 最高但 collision / timeout 风险更高
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -134,6 +135,7 @@
   - [x] baseline-basic 已完成一次 sensor-only Bench2Drive 220 闭环，确认当前空间 PID 可以完成评测但闭环表现较弱
   - [x] 当前 target / anchor 是空间 checkpoint 语义，`DiffusionDriveAgent` 默认空间 PID 已不再用 waypoint 时间索引估计 desired speed
   - [x] 已确认当前开环 `l1 / ade / fde` 与 leaderboard closed-loop 指标不充分对齐：baseline-basic 开环极低误差仍只得到 `DS=44.81`
+  - [x] 已完成 20-route 闭环 A/B 初筛：空间 PID speed tuning 优于单独 stuck-threshold sweep
   - [ ] 设计面向闭环 failure modes 的训练 / 调参指标，重点覆盖 route deviation、blocked、低速和 collisions
 
 - [ ] **训练工程可复现性**
@@ -144,8 +146,10 @@
 
 - [ ] **闭环调参与可观测性**
   - [x] `DiffusionDriveAgent` UKF 已加入 covariance 正定保护和 measurement reset，避免部分 route 在前几秒因 `numpy.linalg.LinAlgError` 直接 agent crash
+  - [x] `DIFFUSIONDRIVE_STUCK_THRESHOLD` / `DIFFUSIONDRIVE_CREEP_DURATION` / `DIFFUSIONDRIVE_CREEP_THROTTLE` 已支持 env 覆盖，并已重跑 `_real` stuck-threshold ablation
+  - [x] 已确认 creep 不能仅从 leaderboard aggregate 判断，需要统计 `Detected agent being stuck` 与 `Creeping stopped by safety box` 日志
   - [ ] 调 `safety_box_*` 阈值，适配训练后模型的闭环行为
-  - [ ] 评估 `stuck_threshold` / `creep_duration` 是否需要联调
+  - [ ] 评估 `stuck_threshold` / `creep_duration` 是否需要和空间 PID speed 联调
   - [ ] 收敛 creep / safety box 相关日志输出，避免长跑日志过噪
 
 ---
@@ -323,16 +327,17 @@
 **需要重点关注**：
 
 - `safety_box_*` 阈值需要按新模型行为重新调
-- `stuck_threshold` / `creep_duration` 需要和模型停车/起步风格联调
+- `stuck_threshold` / `creep_duration` 需要和模型停车/起步风格、空间 PID speed 联调
 - 当前 creep / safety box 相关 `print` 适合调试，但长时间评测时可能日志过噪
 - 如果目标评测环境是 Bench2Drive，还要额外考虑 `AgentBlockedTest` 更早触发的问题
+- 当前 20-route 结果显示，A8/A9 减少了 safety-box stop loops，但 A9 在个别 route 上 forced creep ticks 更多；creep 需要作为独立 debug 指标，不应只看 DS/RC
 
 **建议**：
 
 - 训练后单独做闭环调参阶段，不要把训练提升和阈值变化混在一起评估
 - 如需长时间批量评测，考虑将这类日志改为可配置 debug 开关或限频输出
 - 如果跑 Bench2Drive，优先确认 stuck recovery 的触发时机是否明显早于 blocked timeout
-- 不要直接沿用当前 `stuck_threshold = 1100` 的默认值去跑 Bench2Drive 闭环评测
+- 不要直接沿用当前 `stuck_threshold = 1100` 的默认值去跑 Bench2Drive 闭环评测；也不要只调 stuck threshold，应优先联调空间 PID speed、safety box 和 creep 参数
 
 ---
 
