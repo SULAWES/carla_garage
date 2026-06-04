@@ -1134,3 +1134,14 @@ run20 A4_low_speed_steer DIFFUSIONDRIVE_LOW_SPEED_STEER=1
 
 建议先重点看 bench2drive_09/15/50/94/139/212 的 route_dev / RC / collision，确认低速起步保留转向是否真的减少偏航。
 
+你同步这两个文件到远端后，建议重新跑：
+
+run20 A5_stuck120_real DIFFUSIONDRIVE_STUCK_THRESHOLD=120
+run20 A6_stuck170_real DIFFUSIONDRIVE_STUCK_THRESHOLD=170
+run20 A7_stuck300_real DIFFUSIONDRIVE_STUCK_THRESHOLD=300
+
+同时可以继续跑 spatial PID：
+
+run20 A8_pid_6_2p5 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=6.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5

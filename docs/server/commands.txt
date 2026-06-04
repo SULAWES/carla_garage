@@ -30,6 +30,7 @@ srun -p L40 -J ltr_eval -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g 
 
 srun -p L40 -J ltr_closeloop_eval -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
 
+srun -p L40 -J ltr_debug -w gpu4036 -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
 
 srun -p amd -J ltr_cpu -N 1 -n 1 --cpus-per-task=6 --pty /bin/bash
 
