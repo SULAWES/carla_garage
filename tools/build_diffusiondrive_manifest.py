@@ -22,9 +22,11 @@ from diffusiondrive.carla_native_dataset import (  # noqa: E402
     TARGET_MODE_FUTURE_EGO_TIME,
     TARGET_MODE_SPATIAL_PATH,
     Bench2DriveDiffusionDataset,
+    build_target_speed_metadata,
     build_trajectory_target,
     is_hard_left_turn_stop_sample_from_values,
     load_annotation,
+    target_speed_label_metadata,
 )
 
 
@@ -75,6 +77,7 @@ def make_header(args: argparse.Namespace, sample_count: int, scenario_counts: di
         "spatial_target_first_distance": args.spatial_target_first_distance,
         "spatial_target_interval": args.spatial_target_interval,
         "spatial_target_max_future_frames": args.spatial_target_max_future_frames,
+        "target_speed_label": target_speed_label_metadata(),
         "sample_count": sample_count,
         "scenario_counts": scenario_counts,
         "num_workers": args.num_workers,
@@ -133,6 +136,7 @@ def build_record(task: tuple[int, str, int, dict]) -> tuple[int, dict, bool]:
         "speed": speed,
         "trajectory": trajectory.tolist(),
     }
+    record.update(build_target_speed_metadata(annotation))
     return index, record, hard_case
 
 

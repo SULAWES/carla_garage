@@ -98,7 +98,8 @@
   - [ ] 明确 speed 是否归一化；syb 旧模型通过 `BatchNorm1d(1, affine=False)` 处理速度，DD 迁移时需要单独决策
 
 - [ ] **`SpeedHead-v1` 显式速度 / 刹车语义**
-  - [ ] 扩展 raw B2D sample discovery / manifest，缓存 `target_speed`、`brake`，并在 header 中记录 speed label schema
+  - [x] 扩展 raw B2D sample discovery / manifest，缓存 `target_speed`、`brake`，并在 header 中记录 speed label schema
+  - [x] dataset batch 的 `targets` 已输出 `target_speed`、`brake`、`target_speed_twohot`、`target_speed_class`、`target_speed_label_valid`
   - [ ] 采用 syb 风格 speed bins 作为第一版：`[0.0, 4.0, 8.0, 10.0, 13.8889, 16.0, 17.7778, 20.0]`，其中 `0.0` 类承担 brake / stop 语义
   - [ ] 在 DiffusionDrive 模型中新增 speed/brake head；第一版可从 fused feature / ego query / status token 接 MLP，不改 diffusion trajectory head
   - [ ] 训练入口新增 speed loss 权重、speed classification / brake accuracy / target speed MAE 日志

@@ -20,6 +20,8 @@ import transfuser_utils as t_u
 
 TARGET_MODE_SPATIAL_PATH = "spatial_path"
 TARGET_MODE_FUTURE_EGO_TIME = "future_ego_time"
+TARGET_SPEED_LABEL_SCHEMA = "syb_twohot_target_speed_v1"
+TARGET_SPEED_CLASSES_MPS = (0.0, 4.0, 8.0, 10.0, 13.88888888, 16.0, 17.77777777, 20.0)
 
 
 class Bench2DriveDiffusionDataset(Dataset):
@@ -89,7 +91,7 @@ class Bench2DriveDiffusionDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict:
         cv2.setNumThreads(0)
-        route_dir, frame, command, speed, trajectory = self._sample_components(index)
+        route_dir, frame, command, speed, trajectory, speed_target = self._sample_components(index)
         hard_case = is_hard_left_turn_stop_sample_from_values(
             command,
             speed,
@@ -115,13 +117,18 @@ class Bench2DriveDiffusionDataset(Dataset):
                 "trajectory": trajectory,
                 "trajectory_sample_weight": torch.tensor(sample_weight, dtype=torch.float32),
                 "hard_left_turn_stop": torch.tensor(float(hard_case), dtype=torch.float32),
+                "target_speed": torch.tensor(speed_target["target_speed"], dtype=torch.float32),
+                "target_speed_twohot": torch.tensor(speed_target["target_speed_twohot"], dtype=torch.float32),
+                "target_speed_class": torch.tensor(float(speed_target["target_speed_class"]), dtype=torch.float32),
+                "target_speed_label_valid": torch.tensor(float(speed_target["target_speed_label_valid"]), dtype=torch.float32),
+                "brake": torch.tensor(float(speed_target["brake"]), dtype=torch.float32),
             },
             "route": route_dir.name,
             "frame": frame,
         }
 
     def get_sample_summary(self, index: int) -> dict:
-        route_dir, frame, command, speed, trajectory = self._sample_components(index)
+        route_dir, frame, command, speed, trajectory, speed_target = self._sample_components(index)
         hard_case = is_hard_left_turn_stop_sample_from_values(
             command,
             speed,
@@ -137,16 +144,21 @@ class Bench2DriveDiffusionDataset(Dataset):
             "speed": speed,
             "trajectory": trajectory,
             "hard_left_turn_stop": hard_case,
+            "target_speed": speed_target["target_speed"],
+            "target_speed_class": speed_target["target_speed_class"],
+            "target_speed_label_valid": speed_target["target_speed_label_valid"],
+            "brake": speed_target["brake"],
         }
 
-    def _sample_components(self, index: int) -> tuple[Path, int, int, float, torch.Tensor]:
+    def _sample_components(self, index: int) -> tuple[Path, int, int, float, torch.Tensor, dict]:
         route_dir, frame = self.samples[index]
         if self.sample_metadata is not None:
             metadata = self.sample_metadata[index]
             command = int(metadata["command"])
             speed = float(metadata["speed"])
             trajectory = torch.tensor(metadata["trajectory"], dtype=torch.float32)
-            return route_dir, frame, command, speed, trajectory
+            speed_target = target_speed_metadata_from_record(metadata, fallback_speed=speed)
+            return route_dir, frame, command, speed, trajectory, speed_target
 
         annotation = load_annotation(route_dir, frame)
         trajectory = build_trajectory_target(
@@ -161,7 +173,8 @@ class Bench2DriveDiffusionDataset(Dataset):
         )
         command = int(annotation.get("command_far", annotation.get("command_near", 4)))
         speed = float(annotation["speed"])
-        return route_dir, frame, command, speed, trajectory
+        speed_target = build_target_speed_metadata(annotation)
+        return route_dir, frame, command, speed, trajectory, speed_target
 
     def _load_sample_manifest(self, manifest_path: Path) -> tuple[List[tuple[Path, int]], List[dict], dict[str, int]]:
         samples: List[tuple[Path, int]] = []
@@ -183,6 +196,11 @@ class Bench2DriveDiffusionDataset(Dataset):
                 metadata.append({
                     "command": int(record["command"]),
                     "speed": float(record["speed"]),
+                    "target_speed": float(record.get("target_speed", record["speed"])),
+                    "brake": _annotation_bool(record.get("brake", False)),
+                    "target_speed_class": int(record.get("target_speed_class", -1)),
+                    "target_speed_twohot": record.get("target_speed_twohot"),
+                    "target_speed_label_valid": int(record.get("target_speed_label_valid", 0)),
                     "trajectory": record["trajectory"],
                 })
                 scenario = route_dir.parent.name
@@ -265,6 +283,7 @@ class Bench2DriveDiffusionDataset(Dataset):
             "spatial_target_first_distance": self.spatial_target_first_distance,
             "spatial_target_interval": self.spatial_target_interval,
             "spatial_target_max_future_frames": self.spatial_target_max_future_frames,
+            "target_speed_label": target_speed_label_metadata(),
             "sample_count": len(self.samples),
         }
 
@@ -291,10 +310,16 @@ class Bench2DriveDiffusionDataset(Dataset):
                     "speed": float(annotation["speed"]),
                     "trajectory": trajectory.tolist(),
                 }
+                record.update(build_target_speed_metadata(annotation))
                 file.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
                 metadata_records.append({
                     "command": record["command"],
                     "speed": record["speed"],
+                    "target_speed": record["target_speed"],
+                    "brake": record["brake"],
+                    "target_speed_class": record["target_speed_class"],
+                    "target_speed_twohot": record["target_speed_twohot"],
+                    "target_speed_label_valid": record["target_speed_label_valid"],
                     "trajectory": record["trajectory"],
                 })
 
@@ -542,6 +567,88 @@ def build_status_feature(annotation: dict) -> torch.Tensor:
     command = int(annotation.get("command_far", annotation.get("command_near", 4)))
     speed = float(annotation["speed"])
     return build_status_feature_from_command(command, speed)
+
+
+def target_speed_label_metadata() -> dict:
+    return {
+        "schema": TARGET_SPEED_LABEL_SCHEMA,
+        "classes_mps": list(TARGET_SPEED_CLASSES_MPS),
+        "brake_class_index": 0,
+        "valid_key": "target_speed_label_valid",
+    }
+
+
+def build_target_speed_metadata(annotation: dict) -> dict:
+    has_target_speed = "target_speed" in annotation
+    has_brake = "brake" in annotation or "control_brake" in annotation
+    target_speed = float(annotation["target_speed"]) if has_target_speed else float(annotation.get("speed", 0.0))
+    brake = _annotation_bool(annotation.get("brake", annotation.get("control_brake", False)))
+    return target_speed_metadata_from_values(
+        target_speed,
+        brake,
+        valid=has_target_speed and has_brake,
+    )
+
+
+def target_speed_metadata_from_record(record: dict, *, fallback_speed: float) -> dict:
+    if record.get("target_speed_twohot") is not None and int(record.get("target_speed_class", -1)) >= 0:
+        twohot = [float(value) for value in record["target_speed_twohot"]]
+        target_speed_class = int(record["target_speed_class"])
+    else:
+        twohot = target_speed_twohot(
+            float(record.get("target_speed", fallback_speed)),
+            _annotation_bool(record.get("brake", False)),
+        )
+        target_speed_class = int(np.argmax(twohot))
+    return {
+        "target_speed": float(record.get("target_speed", fallback_speed)),
+        "brake": _annotation_bool(record.get("brake", False)),
+        "target_speed_twohot": twohot,
+        "target_speed_class": target_speed_class,
+        "target_speed_label_valid": int(record.get("target_speed_label_valid", 0)),
+    }
+
+
+def target_speed_metadata_from_values(target_speed: float, brake: bool, *, valid: bool) -> dict:
+    twohot = target_speed_twohot(target_speed, brake)
+    return {
+        "target_speed": float(target_speed),
+        "brake": bool(brake),
+        "target_speed_twohot": twohot,
+        "target_speed_class": int(np.argmax(twohot)),
+        "target_speed_label_valid": int(valid),
+    }
+
+
+def target_speed_twohot(
+    target_speed: float,
+    brake: bool,
+    classes_mps: tuple[float, ...] = TARGET_SPEED_CLASSES_MPS,
+) -> list[float]:
+    classes = np.asarray(classes_mps, dtype=np.float64)
+    label = np.zeros((classes.shape[0],), dtype=np.float32)
+    speed = float(target_speed)
+    if brake or speed <= classes[0]:
+        label[0] = 1.0
+        return label.tolist()
+    if speed >= classes[-1]:
+        label[-1] = 1.0
+        return label.tolist()
+
+    upper_idx = int(np.argmax(classes > speed))
+    lower_idx = max(upper_idx - 1, 0)
+    lower_val = float(classes[lower_idx])
+    upper_val = float(classes[upper_idx])
+    denom = max(upper_val - lower_val, 1e-6)
+    label[lower_idx] = (upper_val - speed) / denom
+    label[upper_idx] = (speed - lower_val) / denom
+    return label.tolist()
+
+
+def _annotation_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
 
 
 def is_hard_left_turn_stop_sample(

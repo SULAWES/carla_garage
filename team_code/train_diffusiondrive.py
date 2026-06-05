@@ -21,6 +21,7 @@ from torch.utils.data.distributed import DistributedSampler
 from config import GlobalConfig
 from diffusiondrive.carla_native_dataset import (
     Bench2DriveDiffusionDataset,
+    target_speed_label_metadata,
 )
 from diffusiondrive.config_adapter import (
     DiffusionDriveRuntimeOverrides,
@@ -360,6 +361,7 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "dim": dd_config.status_dim,
             "normalized": False,
         },
+        "target_speed_label": target_speed_label_metadata(),
     }
     config_path = output_dir / "training_config.json"
     with config_path.open("w", encoding="utf-8") as file:
@@ -547,9 +549,12 @@ def summarize_sample_distribution(
 
         command_counts: Counter[str] = Counter()
         speed_bins: Counter[str] = Counter()
+        target_speed_class_counts: Counter[str] = Counter()
+        brake_counts: Counter[str] = Counter()
         abs_target_end_y_bins: Counter[str] = Counter()
         hard_by_scenario: Counter[str] = Counter()
         hard_count = 0
+        target_speed_valid_count = 0
         target_end_y_values: list[float] = []
 
         for index in indices:
@@ -562,6 +567,9 @@ def summarize_sample_distribution(
 
             command_counts[str(command)] += 1
             speed_bins[_speed_bin(speed)] += 1
+            target_speed_class_counts[str(int(sample["target_speed_class"]))] += 1
+            brake_counts[str(int(bool(sample["brake"])))] += 1
+            target_speed_valid_count += int(sample["target_speed_label_valid"])
             abs_target_end_y_bins[_abs_y_bin(abs_target_end_y)] += 1
             target_end_y_values.append(abs_target_end_y)
 
@@ -581,6 +589,11 @@ def summarize_sample_distribution(
             },
             "command_counts": dict(sorted(command_counts.items())),
             "speed_bins_mps": dict(sorted(speed_bins.items())),
+            "target_speed_label_schema": target_speed_label_metadata(),
+            "target_speed_class_counts": dict(sorted(target_speed_class_counts.items())),
+            "target_speed_label_valid_count": target_speed_valid_count,
+            "target_speed_label_valid_fraction": target_speed_valid_count / max(len(indices), 1),
+            "brake_counts": dict(sorted(brake_counts.items())),
             "abs_target_end_y_bins_m": dict(sorted(abs_target_end_y_bins.items())),
             "hard_left_turn_stop_by_scenario": dict(sorted(hard_by_scenario.items())),
             "abs_target_end_y_mean": float(np.mean(target_end_y_values)) if target_end_y_values else 0.0,

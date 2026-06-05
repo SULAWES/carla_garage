@@ -571,7 +571,7 @@ throttle/brake: predicted target_speed/brake + longitudinal controller
 
 ### 待做
 
-- manifest / dataset 缓存 `target_speed` 和 `brake`，并记录 label schema。
+- manifest / dataset 已缓存 `target_speed` 和 `brake`，并记录 syb two-hot speed label schema。
 - model 新增 speed/brake head 和 loss，先用 syb two-hot / CE 风格。
 - agent 推理侧新增可切换的 predicted-speed longitudinal controller；保留当前 spatial PID desired speed 作为 fallback。
 - open-loop 先输出 speed classification / brake accuracy / target speed MAE，再只对少数候选跑 20-route。
@@ -654,10 +654,11 @@ notes:
 
 ## 当前推荐优先级
 
-1. 实现 `SpeedHead-v1`：manifest / dataset 读取 `target_speed`、`brake`，模型新增 speed/brake head，训练记录 speed loss 和 open-loop speed metrics。
+1. 继续实现 `SpeedHead-v1`：manifest / dataset 读取 `target_speed`、`brake` 已完成；下一步是模型新增 speed/brake head，训练记录 speed loss 和 open-loop speed metrics。
 2. 实现两个 condition token：保留 `status_token(command_one_hot+speed)`，新增 `route_condition_token(target_point+target_point_next)`，不要恢复旧 `extra_sensors` 分支，也不要先做 11 维 flat status。
-3. 用 full B2D 重新训练 `baseline-condition-v1`。重训成本可接受，优先用 open-loop all-scenarios 检查 trajectory 与 speed metrics。
-4. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。
-5. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
-6. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
-7. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。
+3. 训练前用 `tools/summarize_b2d_quality_filter.py` 统计 full / soft-clean / syb-clean 三套保留率、per-scenario 覆盖和 speed/brake label 分布，再决定 manifest filter 强度。
+4. 用选定的 B2D manifest 重新训练 `baseline-condition-v1`。重训成本可接受，优先用 open-loop all-scenarios 检查 trajectory 与 speed metrics。
+5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。
+6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
+7. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
+8. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。

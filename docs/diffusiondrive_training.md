@@ -144,7 +144,7 @@ route_condition_token = target_point(2) + target_point_next(2)
 
 `status_token` 继续复用当前 status builder；`route_condition_token` 需要训练侧从 measurements / manifest 读取 `target_point`、`target_point_next`，推理侧复用 `DiffusionDriveAgent.tick()` 已计算的 ego-frame route target。该改动会改变模型接口和 checkpoint 兼容性，应作为 full retrain 实验处理。
 
-同时，`baseline-condition-v1` 的第一优先是新增 `SpeedHead-v1`：从 B2D `target_speed` / `brake` 监督显式速度 / 刹车语义，推理时由 diffusion trajectory 负责横向路径，speed head 负责纵向 throttle/brake。manifest 和 `training_config.json` 需要记录 speed label schema、condition token schema 和 fallback 控制方式。
+同时，`baseline-condition-v1` 的第一优先是新增 `SpeedHead-v1`：从 B2D `target_speed` / `brake` 监督显式速度 / 刹车语义，推理时由 diffusion trajectory 负责横向路径，speed head 负责纵向 throttle/brake。当前已完成数据层切片：dataset / manifest 会输出 `target_speed`、`brake`、`target_speed_twohot`、`target_speed_class`、`target_speed_label_valid`，`training_config.json` 会记录 speed label schema。模型 speed/brake head、speed loss 和推理侧 predicted-speed controller 仍待实现。
 
 ## 本机 mini smoke
 
