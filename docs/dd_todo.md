@@ -73,6 +73,18 @@
   - [ ] 用小规模闭环或离线特征统计评估 JPEG artifact 是否需要保留
   - [ ] 核对单前视输入是否满足当前实验目标
 
+- [ ] **`SpeedHead-v1` 推理接入**
+  - [ ] 从模型输出读取 `target_speed_logits` / brake 类概率
+  - [ ] 将纵向控制从“空间 checkpoint 几何估 desired speed”切到 predicted target speed；保留当前 spatial PID 作为 env fallback
+  - [ ] 在 debug log 中记录 predicted target speed、brake prob、最终 throttle/brake、fallback 状态
+  - [ ] 闭环评测优先固定 20-route；只有接近或超过 A8/A9/A12 时再跑 220-route
+
+- [ ] **Route condition token 推理接入**
+  - [ ] 保留 `status_token=command_one_hot(6)+speed(1)`
+  - [ ] 新增 `route_condition_token=target_point(2)+target_point_next(2)`，复用 `tick()` 已计算的 ego-frame route target
+  - [ ] 不恢复旧 `extra_sensors` 分支，不把 route 信息简单塞成 11 维 flat status
+  - [ ] 在 agent 启动日志中打印 condition token schema，避免加载 checkpoint 时误用旧模型接口
+
 - [ ] **轨迹表示一致性**
   - [x] 明确 CARLA 侧训练 / 推理统一使用 `99x10x2` 轨迹表示，不在轨迹 head 中预测 heading
   - [x] 核对 `plan_anchor`、`norm_odo()/denorm_odo()` 与最终 `trajectory` 输出的维度语义是否一致

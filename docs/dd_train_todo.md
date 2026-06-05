@@ -94,7 +94,24 @@
   - [x] 训练 / 推理默认统一使用当前 command；推理侧旧 `commands[-2]` 延迟逻辑保留为 `DIFFUSIONDRIVE_COMMAND_DELAY=1` fallback
   - [x] 将训练侧和推理侧改为共用同一份 status builder，避免 schema 分叉
   - [x] 迁移时删除 / 废弃 acceleration 输入；旧实现中训练用 IMU `acceleration[0]`、推理用 speed finite difference，二者不一致
+  - [ ] 下一轮 `baseline-condition-v1` 中保留该 7 维输入作为 `status_token`，不要恢复旧 `extra_sensors`
   - [ ] 明确 speed 是否归一化；syb 旧模型通过 `BatchNorm1d(1, affine=False)` 处理速度，DD 迁移时需要单独决策
+
+- [ ] **`SpeedHead-v1` 显式速度 / 刹车语义**
+  - [ ] 扩展 raw B2D sample discovery / manifest，缓存 `target_speed`、`brake`，并在 header 中记录 speed label schema
+  - [ ] 采用 syb 风格 speed bins 作为第一版：`[0.0, 4.0, 8.0, 10.0, 13.8889, 16.0, 17.7778, 20.0]`，其中 `0.0` 类承担 brake / stop 语义
+  - [ ] 在 DiffusionDrive 模型中新增 speed/brake head；第一版可从 fused feature / ego query / status token 接 MLP，不改 diffusion trajectory head
+  - [ ] 训练入口新增 speed loss 权重、speed classification / brake accuracy / target speed MAE 日志
+  - [ ] 推理侧新增 predicted-speed longitudinal controller，保留当前 spatial PID desired speed 作为 fallback / ablation
+  - [ ] 将 run 命名为 `baseline-condition-v1` 或更具体的 `speedhead_v1_*`，避免和已完成的 `baseline-basic` 混淆
+
+- [ ] **两个 condition token 的 route conditioning**
+  - [ ] 模型接口改为两个低维 condition token：`status_token=command_one_hot(6)+speed(1)`，`route_condition_token=target_point(2)+target_point_next(2)`
+  - [ ] 不做 11 维 flat `status_feature`，也不恢复旧 garage / syb 的独立 `extra_sensors` 分支
+  - [ ] 训练侧从 measurements / manifest 读取并缓存 `target_point`、`target_point_next`，保证与 trajectory target 同为 ego-frame meter 语义
+  - [ ] 推理侧复用 `DiffusionDriveAgent.tick()` 已计算的 ego-frame `target_point`、`target_point_next`
+  - [ ] 在 `training_config.json` 中记录 condition token schema、维度、是否归一化和 checkpoint 兼容策略
+  - [ ] 该改动改变模型接口，必须 full retrain；如 warm-start baseline-basic，需要显式跳过新增层并在 run notes 中标注
 
 - [ ] **图像预处理方案验证**
   - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`

@@ -15,7 +15,7 @@
 - [diffusiondrive_anchor_adaptation.md](diffusiondrive_anchor_adaptation.md)：最新 `99x10x2` anchor 的适配路线。
 - [diffusiondrive_training.md](diffusiondrive_training.md)：当前 CARLA-native DiffusionDrive 训练入口和 smoke 命令。
 - [diffusiondrive_remote_training_progress.md](diffusiondrive_remote_training_progress.md)：远端 B2D Full 训练阶段、baseline-basic open-loop / closed-loop、20-route 闭环 A/B 和高误差样本诊断。
-- [diffusiondrive_baseline_next_steps.md](diffusiondrive_baseline_next_steps.md)：baseline-basic 之后的 sensor-aligned 重训、PID、LiDAR BEV 遗留项和评测门槛。
+- [diffusiondrive_baseline_next_steps.md](diffusiondrive_baseline_next_steps.md)：baseline-basic 之后的 `baseline-condition-v1` 主线、`SpeedHead-v1`、route condition token、PID / LiDAR 诊断和评测门槛。
 - [diffusiondrive_local_env.md](diffusiondrive_local_env.md)：当前本机 `garage_2` 环境和 smoke test 结果。
 
 ### 本地结果归档

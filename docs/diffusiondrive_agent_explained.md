@@ -179,6 +179,8 @@ sensor / model override 的应用顺序是：先创建 `GlobalConfig()`，然后
 
 这是一份面向当前 CARLA 推理链路的状态输入定义。当前 DD 主线已经在训练和推理侧共用 `diffusiondrive.status` 中的 builder，不再保留独立 `extra_sensors` 分支。
 
+下一轮 `baseline-condition-v1` 仍不恢复旧 `extra_sensors`。计划保留当前 `status_token=command_one_hot(6)+speed(1)`，另加独立 `route_condition_token=target_point(2)+target_point_next(2)`；不要把 route target 简单塞进 11 维 flat status。该方案尚未实现，属于待做模型接口改动，需要 full retrain。
+
 ### 3.6 `_control_pid()`
 
 这个函数把模型输出轨迹转成控制信号。

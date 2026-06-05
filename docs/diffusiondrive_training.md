@@ -135,6 +135,17 @@ status_feature = command_one_hot(6) + speed(1)
 
 也就是把 syb / garage `extra_sensors` 的核心设计吸收到 DiffusionDrive 的 `status_feature` 中。迁移后 `_status_encoding` 从 `Linear(10, 256)` 变成 `Linear(7, 256)`，旧 checkpoint 中这一层按 shape mismatch 跳过即可。
 
+下一轮 `baseline-condition-v1` 不恢复旧 `extra_sensors`，也不建议把 route 目标点直接拼成 `11` 维 flat status。计划改为两个 condition token：
+
+```text
+status_token = command_one_hot(6) + speed(1)
+route_condition_token = target_point(2) + target_point_next(2)
+```
+
+`status_token` 继续复用当前 status builder；`route_condition_token` 需要训练侧从 measurements / manifest 读取 `target_point`、`target_point_next`，推理侧复用 `DiffusionDriveAgent.tick()` 已计算的 ego-frame route target。该改动会改变模型接口和 checkpoint 兼容性，应作为 full retrain 实验处理。
+
+同时，`baseline-condition-v1` 的第一优先是新增 `SpeedHead-v1`：从 B2D `target_speed` / `brake` 监督显式速度 / 刹车语义，推理时由 diffusion trajectory 负责横向路径，speed head 负责纵向 throttle/brake。manifest 和 `training_config.json` 需要记录 speed label schema、condition token schema 和 fallback 控制方式。
+
 ## 本机 mini smoke
 
 ```bash

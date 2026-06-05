@@ -1,19 +1,20 @@
 # DiffusionDrive Baseline Next Steps
 
-本文档集中记录 baseline-basic 之后讨论出的工程判断和下一步实验方向。目标是先得到一个更可信的 `baseline-sensor-aligned`，再在其上做持续学习或更复杂的模型改进。
+本文档集中记录 baseline-basic 之后讨论出的工程判断和下一步实验方向。当前主线已从 `baseline-sensor-aligned` 调整为 `baseline-condition-v1`：保留 DiffusionDrive 扩散轨迹头，在其上补显式 speed/brake 语义和 route condition token，再作为持续学习或更复杂模型改进的基础。
 
 ## 当前判断
 
 - `baseline-basic` 是当前朴素 CARLA-native port：B2D Full raw train、garage online sensor suite、当前 crop/JPEG/preprocessing、`spatial_path` target、trajectory-only、sensor-only 且 `STOP_CONTROL=0`。
 - 当前 full baseline-basic open-loop 很强：all-scenarios `l1_mean=0.0192`；但 Bench2Drive 220 closed-loop 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`。
-- 这说明主要问题已经从训练链路转向闭环执行：sensor contract gap、空间 checkpoint 到控制的速度语义 gap、低速/creep/safety-box、route deviation、collisions。
-- 完全重训成本可接受，因此后续不必只在当前 checkpoint 上做推理侧小调参；更合理的是重训一个 sensor / preprocessing 更一致的强 baseline。
+- 这说明主要问题已经从训练链路转向闭环执行：空间 checkpoint 到控制的速度语义 gap、低速/creep/safety-box、route deviation、collisions，以及部分 sensor contract gap。
+- `S1/S2` camera / crop 诊断表现明显差于 A8/A9/A12，说明当前不宜把主线继续押在 B2D-like 在线 camera geometry 上。sensor-aligned full retrain 暂时降级为归档/诊断方向。
+- 完全重训成本可接受，且 220-route 闭环比重训更慢；因此后续应减少纯推理侧小实验，把工作集中到少数结构性改动和 full retrain 上。
 
 ## 实验原则
 
 - `baseline-basic` 作为当前已完成结果保留，不再回头修改其定义；后续新结果用新的 run name 和文档条目记录。
-- `baseline-sensor-aligned` 仍然属于 baseline，不应混入持续学习、hard-case loss weighting、privileged stop-sign controller 或复杂 auxiliary task。
-- 每次只改一个主要因素。sensor geometry、crop、JPEG、normalization、PID、safety box、LiDAR ablation 应拆开验证，避免一个好结果解释不清。
+- `baseline-condition-v1` 仍然属于 baseline 改进，不应混入持续学习、hard-case loss weighting、privileged stop-sign controller 或复杂 auxiliary task。
+- 每次只改一个主要因素。speed/brake head、route condition token、sensor geometry、crop、JPEG、normalization、PID、safety box、LiDAR ablation 应拆开记录，避免一个好结果解释不清。
 - 20-route A/B 必须尽量复用同一组 routes、同一份 checkpoint、同一套记录字段。否则 route 难度和基础设施波动会掩盖控制或 sensor 修改的真实收益。
 - 闭环结论不能只看聚合 `DS/NDS/RC`。要同时看 route-level status、collision、timeout、blocked、route deviation、`MinSpeedTest`、forced creep 和 safety-box stop。
 - 因为全量训练比 220-route 闭环评测更便宜，策略应是：先用 open-loop 和 20-route 筛掉明显错误方向，再把少数候选放到 220-route。
@@ -29,12 +30,16 @@ baseline-basic
 建议新线命名为：
 
 ```text
-baseline-sensor-aligned
+baseline-condition-v1
 ```
 
-含义是：仍然是 baseline，不引入持续学习方法，不使用 privileged stop-sign controller，不启用 hard-case tuned checkpoint，但显式减少训练和在线推理之间的 sensor / preprocessing gap。
+含义是：仍然是 baseline，不引入持续学习方法，不使用 privileged stop-sign controller，不启用 hard-case tuned checkpoint；主要改动是给扩散轨迹头补 `SpeedHead-v1` 和两个 condition token。
+
+`baseline-sensor-aligned` 仍可作为诊断/归档名称保留，但在 `S1/S2` 失败后不再是当前优先主线。
 
 ## Sensor Contract 方向
+
+该方向目前降级为诊断项，不再作为下一次 full retrain 的默认优先级。原因是在线 B2D-like camera / nocrop 诊断已经显著低于 A8/A9/A12，继续围绕 camera geometry 大量闭环 A/B 的性价比不高。
 
 当前最大传感器 gap 是 camera：
 
@@ -45,7 +50,7 @@ online garage camera: 1024x512, fov=110, x=-1.5, z=2.0
 
 当前训练只是把 raw B2D 图像 resize 到 online size，再 crop/resize 到模型输入。这只对齐 tensor shape，不能消除真实几何 gap。特别是 raw image 是 `1600x900`，训练中先压到 `1024x512`，aspect ratio 从 `16:9` 变为 `2:1`；如果在线直接申请 `1024x512, fov=70`，它也只是 B2D-like，不应被解释为完全等价于 raw B2D camera。
 
-还有一个容易混淆的点：`baseline-basic` 的训练图像本身已经来自 B2D Full raw camera，因此训练侧视觉分布已经更接近 `fov=70, x=0.8, z=1.6`。真正不一致的是 closed-loop 在线推理仍向 CARLA 申请 garage camera。也就是说，第一步 sensor-aligned 实验应优先改在线 sensor suite，而不是马上重训。
+还有一个容易混淆的点：`baseline-basic` 的训练图像本身已经来自 B2D Full raw camera，因此训练侧视觉分布已经更接近 `fov=70, x=0.8, z=1.6`。真正不一致的是 closed-loop 在线推理仍向 CARLA 申请 garage camera。此前 sensor-aligned 诊断因此优先改在线 sensor suite，而不是马上重训；但 `S1/S2` 结果较差后，该方向暂不作为当前主线。
 
 ### 当前代码开关状态
 
@@ -178,7 +183,7 @@ DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024 或 512
    - collision 不明显增加。
    - 20-route 的 DS / NDS 至少接近 A8/A9，或者在坏 route 上有清楚改善。
 
-   如果这一步有收益，说明 online sensor gap 是有效方向。此时不一定需要立即重训，因为训练图像本来就是 B2D raw；更应该先确认这个收益在 20-route 上稳定，再决定是否用 clean run name 重新训练或直接把它作为 `baseline-sensor-aligned-inference`。
+   该实验已作为历史诊断保留。若未来重新发现稳定收益，说明 online sensor gap 仍可能是有效方向；但基于当前 `S1/S2` 结果，不建议继续围绕它消耗主要闭环预算。
 
    必须保存 preprocessing snapshot，至少包括：
 
@@ -223,7 +228,7 @@ DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024 或 512
 
    可选 clean retrain。在线和训练记录都采用更接近 B2D raw 的 camera geometry，但保留当前 crop / model image size。
 
-   需要明确：如果训练像素链路、manifest、seed 以外都不变，这个实验的训练 tensor 与 baseline-basic 基本相同，主要价值是得到一个命名和配置都干净的 `baseline-sensor-aligned`，而不是提供新的实验变量。因此它的优先级低于 `S1/S1a/S1b`。只有当 `S1` 证明 B2D-like online camera 有稳定收益，或者论文/归档需要一个配置命名干净的复现实验时，再考虑花 full training。它应尽量保持如下条件不变：
+   需要明确：如果训练像素链路、manifest、seed 以外都不变，这个实验的训练 tensor 与 baseline-basic 基本相同，主要价值是得到一个命名和配置都干净的 sensor-aligned 复现实验，而不是提供新的实验变量。基于当前 `S1/S2` 结果，它不再是优先 full training。只有当未来重新证明 B2D-like online camera 有稳定收益，或者论文/归档需要一个配置命名干净的复现实验时，再考虑花 full training。它应尽量保持如下条件不变：
 
    ```text
    target_mode = spatial_path
@@ -271,7 +276,7 @@ DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024 或 512
 
    当前训练脚本支持 `--model-image-width 512`，但推理侧 `DiffusionDriveConfig.camera_width` 默认仍是 `1024`，没有 env override。因此在正式跑该实验前必须补齐 runtime model image size 配置，否则会出现 checkpoint shape 或输入尺寸不一致。
 
-   该方向的风险是横向视野被压缩后，路口和大曲率转弯的上下文不足。它适合作为第三个 sensor-aligned full train，而不是第一个。
+   该方向的风险是横向视野被压缩后，路口和大曲率转弯的上下文不足。它只适合作为低优先级 sensor 诊断，而不是当前 full train 主线。
 
 ### Sensor 实验记录要求
 
@@ -303,7 +308,7 @@ notes:
 
 ### 不建议现在切到三相机
 
-原版 NAVSIM DiffusionDrive 使用多相机视角，但当前 CARLA-native baseline 的数据、在线 sensor suite、训练代码和推理 contract 都是围绕单前视冻结的。三相机会引入新的数据生成、模型输入接口、显存和在线同步问题。除非后续明确要做 `baseline-multicam`，否则不要把它混入 `baseline-sensor-aligned`。
+原版 NAVSIM DiffusionDrive 使用多相机视角，但当前 CARLA-native baseline 的数据、在线 sensor suite、训练代码和推理 contract 都是围绕单前视冻结的。三相机会引入新的数据生成、模型输入接口、显存和在线同步问题。除非后续明确要做 `baseline-multicam`，否则不要把它混入 `baseline-condition-v1`。
 
 ### 暂不优先做
 
@@ -344,7 +349,7 @@ speed_slow = 2.5
 
 判断逻辑：
 
-- 如果 `7.0/2.5` 比 A9 少 collision / timeout，同时保留低 `MinSpeedTest` penalty，则它适合作为后续 sensor-aligned baseline 的默认 PID。
+- 如果 `7.0/2.5` 比 A9 少 collision / timeout，同时保留低 `MinSpeedTest` penalty，则它可作为后续 `baseline-condition-v1` 的 spatial-PID fallback 参数。
 - 如果 `6.5/2.75` 更稳，则先用它作为强 baseline 控制配置。
 
 ### 下一步可试
@@ -530,24 +535,70 @@ LiDAR / safety-box 应在以下情况升为主线问题：
 - 只有当后续决定重训多帧 LiDAR 模型时，v9/v10 才重新成为主线问题。
 - 如果要重启多帧 LiDAR，应先明确目标是“模型输入多帧历史 BEV”还是“仅 safety-box runtime 更稳”。前者需要训练接口和 checkpoint 全部变化，后者更像工程诊断和规则修正。
 
-## Time / Speed Semantics
+## Speed / Brake Head
 
-当前预测 target 是空间 checkpoint，没有时间语义。这确实是低速、起步、creep 和跟车问题的根源之一。
+当前预测 target 是空间 checkpoint，没有时间语义。这是低速、起步、creep、跟车和纵向控制不稳定的根源之一。下一轮第一优先不替换 DiffusionDrive 扩散轨迹头，而是在扩散头基础上补 `SpeedHead-v1`。
 
-但该点先放到 baseline 之后：
+### `SpeedHead-v1` 设计
 
-- baseline 阶段先通过 sensor contract + PID / safety-box 调参得到稳定结果。
-- 后续改进阶段再考虑 speed head、arrival-time profile 或 time-based trajectory。
+保留当前 diffusion trajectory head：
 
-推荐后续方向是“空间路径 + 时间剖面”，而不是直接把当前空间 anchor 硬解释成 fixed-time trajectory。
+```text
+diffusion trajectory head -> selected spatial checkpoint path
+```
 
-### 为什么暂时不改
+新增显式纵向语义分支：
 
-时间语义确实更接近根因，但它会改变训练目标、loss、模型输出和控制接口。现在还在建立论文 baseline，如果此时加入 speed head 或 arrival-time head，baseline 和后续方法的边界会变得不清楚。更稳妥的路线是：
+```text
+fused feature / ego query / status token
+-> target_speed_logits
+```
 
-1. 先把 sensor-only baseline 做到可解释、可复现。
-2. 再把显式时间 / 速度预测作为后续改进方法。
-3. 最后用同一套闭环门槛证明它解决了低速、creep 或跟车问题。
+第一版直接借鉴 syb 的速度 bins：
+
+```text
+[0.0, 4.0, 8.0, 10.0, 13.8889, 16.0, 17.7778, 20.0]
+```
+
+`0.0` 类同时承担 brake / stop 语义。训练标签来自 B2D `measurements/*.json.gz` 中的 `target_speed` 和 `brake`。推理时：
+
+```text
+steer: diffusion trajectory + lateral controller
+throttle/brake: predicted target_speed/brake + longitudinal controller
+```
+
+这比继续从空间 checkpoint 间距反推 desired speed 更稳，也比马上切 time-based anchors 工程风险更低。
+
+### 待做
+
+- manifest / dataset 缓存 `target_speed` 和 `brake`，并记录 label schema。
+- model 新增 speed/brake head 和 loss，先用 syb two-hot / CE 风格。
+- agent 推理侧新增可切换的 predicted-speed longitudinal controller；保留当前 spatial PID desired speed 作为 fallback。
+- open-loop 先输出 speed classification / brake accuracy / target speed MAE，再只对少数候选跑 20-route。
+
+## Route Condition Tokens
+
+当前模型输入只包含 `command_one_hot(6)+speed(1)`。RoutePlanner 计算出的 `target_point` 和 `target_point_next` 只用于控制 / debug，没有进入模型。这会让模型只知道“左转/右转/直行”类别，不知道路线目标点在 ego 坐标系中的具体方向和距离。
+
+下一轮第二优先采用两个 condition token，而不是把所有低维量拼成一个 flat `status_feature`：
+
+```text
+status_token = command_one_hot(6) + speed(1)
+route_condition_token = target_point(2) + target_point_next(2)
+```
+
+原因：
+
+- 更贴近 syb 的结构：`extra_sensors(speed+command)` 和 `target_point` 是两路条件，而不是一个大向量。
+- 方便后续把 route token 升级为 route polyline encoder，而不破坏已有 status token。
+- 比 `command+speed+target_point+target_point_next` 的 11 维 flat status 更清楚，模型结构上也更容易解释。
+
+### 待做
+
+- 训练侧从 measurements / manifest 中缓存 `target_point`、`target_point_next`，并保证和 trajectory target 使用同一 ego-frame 语义。
+- 推理侧复用 `DiffusionDriveAgent.tick()` 已经计算的 ego-frame `target_point`、`target_point_next`。
+- 模型侧保留现有 `status_token`，新增 `route_condition_token` encoder；让 diffusion decoder 同时接收两个低维 condition token。
+- 该改动改变模型接口，必须作为 full retrain 实验处理；不建议直接从 baseline-basic checkpoint 继续训练，除非显式跳过新增层并标注为 warm-start ablation。
 
 ## 评测门槛
 
@@ -581,6 +632,8 @@ sensor_override_implemented:
 preprocessing_snapshot_saved:
 route_guard_enabled:
 safety_box_speed_cap_enabled:
+speed_head_enabled:
+route_condition_token_enabled:
 closed_loop_routes:
 open_loop_output:
 closed_loop_output:
@@ -595,19 +648,16 @@ notes:
 - hard-left 或其他 hard-case sample weighting。
 - privileged stop-sign controller。
 - auxiliary heads，包括 `agent_states / agent_labels / bev_semantic_map`。
-- 显式 speed head、time head、arrival-time profile。
+- time head、arrival-time profile、time-based trajectory anchor。
 - 多帧 LiDAR BEV refinement。
 - 针对 20-route 过拟合的 route-specific PID。
 
 ## 当前推荐优先级
 
-1. 等当前两个 PID 实验结果。
-2. 同步新版 `team_code/diffusiondrive_agent.py` 到远端，确认启动日志打印最终 sensor config / model image size / zero-LiDAR 状态。
-3. 用当前 checkpoint 跑 `S1_camera_b2d_like_checkpoint` 的 20-route。
-4. 若 `S1` 有收益，再视需要跑 `S1a/S1b` 拆分 FOV 和 pose。
-5. `S3_baseline_sensor_aligned_currentcrop_clean` 不作为立即优先项；只有在 `S1` 收益稳定或论文归档需要时再做 clean retrain。
-6. 用当前 checkpoint 跑 `S2_nocrop_checkpoint_diagnostic`，只判断是否值得全量 nocrop 重训。
-7. 若 crop 诊断有收益，重训 `S4_baseline_sensor_aligned_nocrop_train`。
-8. 视结果决定是否重训 `S5_baseline_sensor_aligned_256x512_train`；在线 runtime model image size override 已实现，但 full retrain 前仍要补训练侧 model / preprocessing 参数化并确认 checkpoint shape。
-9. 打开 `DIFFUSIONDRIVE_DEBUG_ROUTE=1` 跑坏 route，确认 aim point / route corridor 偏离是否是主要触发原因；warning 阈值可用 `DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN` 和 `DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG` 调整。再决定是否实现 route-aware speed guard 或轻量 blend。
-10. 打开 `DIFFUSIONDRIVE_DEBUG_SAFETY_BOX=1` 和必要时 `DIFFUSIONDRIVE_ZERO_LIDAR=1` 做 LiDAR 近场诊断；safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发，也暂不把多帧 BEV refinement 放回主线。
+1. 实现 `SpeedHead-v1`：manifest / dataset 读取 `target_speed`、`brake`，模型新增 speed/brake head，训练记录 speed loss 和 open-loop speed metrics。
+2. 实现两个 condition token：保留 `status_token(command_one_hot+speed)`，新增 `route_condition_token(target_point+target_point_next)`，不要恢复旧 `extra_sensors` 分支，也不要先做 11 维 flat status。
+3. 用 full B2D 重新训练 `baseline-condition-v1`。重训成本可接受，优先用 open-loop all-scenarios 检查 trajectory 与 speed metrics。
+4. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。
+5. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
+6. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
+7. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。
