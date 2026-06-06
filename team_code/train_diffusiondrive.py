@@ -21,6 +21,7 @@ from torch.utils.data.distributed import DistributedSampler
 from config import GlobalConfig
 from diffusiondrive.carla_native_dataset import (
     Bench2DriveDiffusionDataset,
+    TARGET_SPEED_CLASSES_MPS,
     target_speed_label_metadata,
 )
 from diffusiondrive.config_adapter import (
@@ -97,6 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-image-width", type=int, default=1024)
     parser.add_argument("--image-normalization", choices=("none", "imagenet"), default="none")
     parser.add_argument("--trajectory-weight", type=float, default=None)
+    parser.add_argument("--speed-loss-weight", type=float, default=None)
     parser.add_argument("--trajectory-cls-weight", type=float, default=None)
     parser.add_argument("--trajectory-reg-weight", type=float, default=None)
     parser.add_argument("--trajectory-focal-alpha", type=float, default=None)
@@ -204,6 +206,7 @@ def parse_int_list(value: str) -> list[int]:
 def apply_runtime_training_overrides(dd_config: Any, args: argparse.Namespace) -> None:
     overrides = {
         "trajectory_weight": args.trajectory_weight,
+        "speed_loss_weight": args.speed_loss_weight,
         "trajectory_cls_weight": args.trajectory_cls_weight,
         "trajectory_reg_weight": args.trajectory_reg_weight,
         "trajectory_focal_alpha": args.trajectory_focal_alpha,
@@ -365,6 +368,13 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "dim": dd_config.status_dim,
             "normalized": False,
         },
+        "speed_head": {
+            "enabled": dd_config.speed_head_enabled,
+            "num_classes": dd_config.speed_head_num_classes,
+            "loss_weight": dd_config.speed_loss_weight,
+            "label_schema": target_speed_label_metadata(),
+            "loss": "soft cross entropy against target_speed_twohot, masked by target_speed_label_valid",
+        },
         "target_speed_label": target_speed_label_metadata(),
     }
     config_path = output_dir / "training_config.json"
@@ -492,8 +502,41 @@ def total_planned_steps(dataloader: DataLoader, args: argparse.Namespace) -> int
     return epoch_steps
 
 
+def add_speed_supervision(outputs: Dict[str, torch.Tensor], targets: Dict[str, torch.Tensor]) -> None:
+    logits = outputs.get("target_speed_logits")
+    if logits is None:
+        return
+
+    target_twohot = targets["target_speed_twohot"].to(device=logits.device, dtype=logits.dtype)
+    valid = (targets["target_speed_label_valid"].to(device=logits.device, dtype=logits.dtype) > 0.5).float()
+    valid_count = valid.sum().clamp_min(1.0)
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    per_sample_loss = -(target_twohot * log_probs).sum(dim=-1)
+    outputs["target_speed_loss"] = (per_sample_loss * valid).sum() / valid_count
+
+    pred_class = logits.argmax(dim=-1)
+    target_class = targets["target_speed_class"].to(device=logits.device).long()
+    valid_bool = valid > 0.5
+    if valid_bool.any():
+        outputs["target_speed_accuracy"] = (pred_class[valid_bool] == target_class[valid_bool]).float().mean()
+        brake_target = targets["brake"].to(device=logits.device) > 0.5
+        outputs["target_speed_brake_accuracy"] = ((pred_class == 0) == brake_target)[valid_bool].float().mean()
+        class_speeds = torch.tensor(TARGET_SPEED_CLASSES_MPS, device=logits.device, dtype=logits.dtype)
+        pred_speed = torch.nn.functional.softmax(logits, dim=-1).matmul(class_speeds)
+        target_speed = targets["target_speed"].to(device=logits.device, dtype=logits.dtype)
+        outputs["target_speed_l1"] = (pred_speed[valid_bool] - target_speed[valid_bool]).abs().mean()
+    else:
+        zero = logits.sum() * 0.0
+        outputs["target_speed_accuracy"] = zero.detach()
+        outputs["target_speed_brake_accuracy"] = zero.detach()
+        outputs["target_speed_l1"] = zero.detach()
+
+
 def compute_total_loss(outputs: Dict[str, torch.Tensor], dd_config: Any) -> torch.Tensor:
-    return dd_config.trajectory_weight * outputs["trajectory_loss"]
+    loss = dd_config.trajectory_weight * outputs["trajectory_loss"]
+    if "target_speed_loss" in outputs:
+        loss = loss + dd_config.speed_loss_weight * outputs["target_speed_loss"]
+    return loss
 
 
 def zero_loss_for_ddp_outputs(outputs: Dict[str, Any]) -> torch.Tensor | float:
@@ -697,11 +740,20 @@ def evaluate(
     for batch in dataloader:
         features, targets = move_features_to_device(batch, device)
         outputs = model(features, targets=targets)
+        add_speed_supervision(outputs, targets)
         total = compute_total_loss(outputs, dd_config)
         total_loss += float(total.detach().cpu())
         total_trajectory_loss += float(outputs["trajectory_loss"].detach().cpu())
         for name, value in outputs.get("trajectory_loss_dict", {}).items():
             total_loss_dict[name] = total_loss_dict.get(name, 0.0) + float(value.detach().cpu())
+        for name in (
+            "target_speed_loss",
+            "target_speed_accuracy",
+            "target_speed_brake_accuracy",
+            "target_speed_l1",
+        ):
+            if name in outputs:
+                total_loss_dict[name] = total_loss_dict.get(name, 0.0) + float(outputs[name].detach().cpu())
         count += 1
         if max_steps is not None and count >= max_steps:
             break
@@ -960,6 +1012,7 @@ def main() -> None:
             features, targets = move_features_to_device(batch, device)
             optimizer.zero_grad(set_to_none=True)
             outputs = model(features, targets=targets)
+            add_speed_supervision(outputs, targets)
             loss = compute_total_loss(outputs, dd_config)
             if is_distributed:
                 loss = loss + zero_loss_for_ddp_outputs(outputs)
@@ -977,7 +1030,15 @@ def main() -> None:
                 avg_loss = running_loss / max(running_count, 1)
                 running_loss = 0.0
                 running_count = 0
-                loss_dict = outputs.get("trajectory_loss_dict", {})
+                loss_dict = dict(outputs.get("trajectory_loss_dict", {}))
+                for name in (
+                    "target_speed_loss",
+                    "target_speed_accuracy",
+                    "target_speed_brake_accuracy",
+                    "target_speed_l1",
+                ):
+                    if name in outputs:
+                        loss_dict[name] = outputs[name]
                 loss_parts = ", ".join(
                     f"{name}={float(value.detach().cpu()):.4f}" for name, value in sorted(loss_dict.items())
                 )

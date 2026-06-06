@@ -24,10 +24,10 @@ class V2TransfuserModel(nn.Module):
 
         super().__init__()
 
-        self._query_splits = [
-            1,
-            config.num_bounding_boxes,
-        ]
+        self._query_splits = [1]
+        if config.speed_head_enabled:
+            self._query_splits.append(1)
+        self._query_splits.append(config.num_bounding_boxes)
 
         self._config = config
         self._backbone = TransfuserBackbone(config)
@@ -38,6 +38,15 @@ class V2TransfuserModel(nn.Module):
         # usually, the BEV features are variable in size.
         self._bev_downscale = nn.Conv2d(512, config.tf_d_model, kernel_size=1)
         self._status_encoding = nn.Linear(config.status_dim, config.tf_d_model)
+        self._speed_head = (
+            nn.Sequential(
+                nn.Linear(config.tf_d_model, config.tf_d_ffn),
+                nn.ReLU(inplace=True),
+                nn.Linear(config.tf_d_ffn, config.speed_head_num_classes),
+            )
+            if config.speed_head_enabled
+            else None
+        )
 
         self._bev_semantic_head = nn.Sequential(
             nn.Conv2d(
@@ -124,9 +133,17 @@ class V2TransfuserModel(nn.Module):
         query_out = self._tf_decoder(query, keyval)
 
         bev_semantic_map = self._bev_semantic_head(bev_feature_upscale)
-        trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
+        if self._speed_head is not None:
+            trajectory_query, speed_query, agents_query = query_out.split(self._query_splits, dim=1)
+        else:
+            trajectory_query, agents_query = query_out.split(self._query_splits, dim=1)
+            speed_query = None
 
         output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
+        if self._speed_head is not None and speed_query is not None:
+            speed_logits = self._speed_head(speed_query.squeeze(1))
+            output["target_speed_logits"] = speed_logits
+            output["target_speed_prob"] = F.softmax(speed_logits, dim=-1)
 
         trajectory = self._trajectory_head(trajectory_query,agents_query, cross_bev_feature,bev_spatial_shape,status_encoding[:, None],targets=targets,global_img=None)
         output.update(trajectory)

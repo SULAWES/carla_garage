@@ -85,6 +85,7 @@ class DiffusionDriveConfig:
 
     # loss weights (kept for completeness)
     trajectory_weight: float = 12.0
+    speed_loss_weight: float = 1.0
     trajectory_cls_weight: float = 10.0
     trajectory_reg_weight: float = 8.0
     trajectory_focal_alpha: float = 0.25
@@ -94,6 +95,10 @@ class DiffusionDriveConfig:
     agent_box_weight: float = 1.0
     bev_semantic_weight: float = 14.0
     use_ema: bool = False
+
+    # SpeedHead-v1: two-hot target_speed/brake supervision from B2D measurements.
+    speed_head_enabled: bool = True
+    speed_head_num_classes: int = 8
 
     # Diffusion trajectory sampling. These mirror the original NAVSIM defaults
     # but are explicit here so CARLA training and inference runs are reproducible.
