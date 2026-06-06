@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-sampling", type=int, default=5)
     parser.add_argument("--val-frame-sampling", type=int, default=None)
     parser.add_argument("--skip-first-frames", type=int, default=0)
+    parser.add_argument("--val-skip-first-frames", type=int, default=None)
     parser.add_argument("--future-stride", type=int, default=10)
     parser.add_argument("--dataset-mode", default="b2d_full_raw")
     parser.add_argument("--target-mode", choices=("spatial_path", "future_ego_time"), default="spatial_path")
@@ -267,6 +268,11 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "frame_sampling": args.frame_sampling,
             "val_frame_sampling": args.val_frame_sampling or args.frame_sampling,
             "skip_first_frames": args.skip_first_frames,
+            "val_skip_first_frames": (
+                args.val_skip_first_frames
+                if args.val_skip_first_frames is not None
+                else args.skip_first_frames
+            ),
             "future_stride": args.future_stride,
             "target_mode": args.target_mode,
             "max_samples": args.max_samples,
@@ -530,7 +536,7 @@ def add_speed_supervision(outputs: Dict[str, torch.Tensor], targets: Dict[str, t
         outputs["target_speed_brake_accuracy"] = ((pred_class == 0) == brake_target)[valid_bool].float().mean()
         class_speeds = torch.tensor(TARGET_SPEED_CLASSES_MPS, device=logits.device, dtype=logits.dtype)
         pred_speed = torch.nn.functional.softmax(logits, dim=-1).matmul(class_speeds)
-        target_speed = targets["target_speed"].to(device=logits.device, dtype=logits.dtype)
+        target_speed = target_twohot.matmul(class_speeds)
         outputs["target_speed_l1"] = (pred_speed[valid_bool] - target_speed[valid_bool]).abs().mean()
     else:
         zero = logits.sum() * 0.0
@@ -677,6 +683,7 @@ def build_dataset(
     route_glob: str,
     enable_hard_case_weight: bool,
     sample_manifest_path: Optional[Path],
+    skip_first_frames: int,
 ) -> Bench2DriveDiffusionDataset:
     return Bench2DriveDiffusionDataset(
         root_dirs,
@@ -703,7 +710,7 @@ def build_dataset(
         hard_left_turn_y_threshold=args.hard_left_turn_y_threshold,
         sample_manifest_path=sample_manifest_path,
         rebuild_sample_manifest=args.rebuild_sample_manifest,
-        skip_first_frames=args.skip_first_frames,
+        skip_first_frames=skip_first_frames,
     )
 
 
@@ -890,6 +897,11 @@ def main() -> None:
         eval_max_samples = args.val_max_samples if args.val_root_dir else args.max_samples
         eval_route_glob = args.val_route_glob or args.route_glob
         eval_manifest = args.val_sample_manifest if args.val_root_dir else args.sample_manifest
+        eval_skip_first_frames = (
+            args.val_skip_first_frames
+            if args.val_root_dir and args.val_skip_first_frames is not None
+            else args.skip_first_frames
+        )
         eval_dataset = build_dataset(
             eval_root_dirs,
             args,
@@ -900,6 +912,7 @@ def main() -> None:
             route_glob=eval_route_glob,
             enable_hard_case_weight=False,
             sample_manifest_path=eval_manifest,
+            skip_first_frames=eval_skip_first_frames,
         )
         eval_dataloader = build_dataloader(eval_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Eval samples: {len(eval_dataset)}", flush=True)
@@ -930,6 +943,7 @@ def main() -> None:
         route_glob=args.route_glob,
         enable_hard_case_weight=True,
         sample_manifest_path=args.sample_manifest,
+        skip_first_frames=args.skip_first_frames,
     )
     train_sampler = (
         DistributedSampler(
@@ -962,6 +976,11 @@ def main() -> None:
             route_glob=args.val_route_glob or args.route_glob,
             enable_hard_case_weight=False,
             sample_manifest_path=args.val_sample_manifest,
+            skip_first_frames=(
+                args.val_skip_first_frames
+                if args.val_skip_first_frames is not None
+                else args.skip_first_frames
+            ),
         )
         val_dataloader = build_dataloader(val_dataset, args, device, shuffle=False, drop_last=False)
         print(f"Validation samples: {len(val_dataset)}", flush=True)

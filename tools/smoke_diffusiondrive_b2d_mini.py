@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,9 @@ from diffusiondrive.carla_native_dataset import (  # noqa: E402
     TARGET_MODE_SPATIAL_PATH,
     build_camera_feature,
     build_lidar_feature,
+    build_route_condition_feature,
     build_status_feature,
+    build_target_speed_metadata,
     build_trajectory_target,
     load_annotation,
 )
@@ -92,6 +95,8 @@ def main() -> None:
     camera_feature = build_camera_feature(route_dir, args.frame, config).unsqueeze(0)
     lidar_feature = build_lidar_feature(route_dir, args.frame, config).unsqueeze(0)
     status_feature = build_status_feature(annotation).unsqueeze(0)
+    route_condition_feature = build_route_condition_feature(annotation).unsqueeze(0)
+    speed_target = build_target_speed_metadata(annotation)
     trajectory = build_trajectory_target(
         route_dir,
         args.frame,
@@ -111,11 +116,31 @@ def main() -> None:
         "camera_feature": camera_feature.to(device),
         "lidar_feature": lidar_feature.to(device),
         "status_feature": status_feature.to(device),
+        "route_condition_feature": route_condition_feature.to(device),
     }
-    targets = {"trajectory": trajectory.to(device)}
+    targets = {
+        "trajectory": trajectory.to(device),
+        "target_speed_twohot": torch.tensor(
+            [speed_target["target_speed_twohot"]],
+            dtype=torch.float32,
+            device=device,
+        ),
+        "target_speed_label_valid": torch.tensor(
+            [speed_target["target_speed_label_valid"]],
+            dtype=torch.float32,
+            device=device,
+        ),
+    }
 
     outputs = model(features, targets=targets)
     loss = outputs["trajectory_loss"]
+    if "target_speed_logits" in outputs:
+        valid = targets["target_speed_label_valid"].clamp_min(0.0)
+        valid_count = valid.sum().clamp_min(1.0)
+        speed_loss = -(
+            targets["target_speed_twohot"] * F.log_softmax(outputs["target_speed_logits"], dim=-1)
+        ).sum(dim=-1)
+        loss = loss + (speed_loss * valid).sum() / valid_count
     loss.backward()
 
     print("mini_smoke_ok")
@@ -126,8 +151,13 @@ def main() -> None:
     print("camera_feature", tuple(features["camera_feature"].shape))
     print("lidar_feature", tuple(features["lidar_feature"].shape))
     print("status_feature", tuple(features["status_feature"].shape))
+    print("route_condition_feature", tuple(features["route_condition_feature"].shape))
     print("target_trajectory", tuple(targets["trajectory"].shape))
+    print("target_speed_valid", int(speed_target["target_speed_label_valid"]))
+    print("target_speed_class", int(speed_target["target_speed_class"]))
     print("output_trajectory", tuple(outputs["trajectory"].shape))
+    if "target_speed_logits" in outputs:
+        print("target_speed_logits", tuple(outputs["target_speed_logits"].shape))
     print("loss", float(loss.detach().cpu()))
     print("grad_norm", _first_nonzero_grad_norm(model))
     for name, value in outputs.get("trajectory_loss_dict", {}).items():

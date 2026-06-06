@@ -125,7 +125,7 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 - 第一阶段正式继续单前视，不升级到 NAVSIM 式三相机拼接。
 - 第一阶段保持当前 CARLA / garage 去底部裁剪，不改成 NAVSIM 上下裁剪。
 - B2D Full 训练第一阶段保留 JPEG artifact，和当前在线推理默认路径一致。
-- `baseline-condition-v1` 将 ImageNet normalization 作为显式训练 / 推理开关，而不是隐含默认；使用 checkpoint 时必须同步 `training_config.json` 和闭环 env。
+- `baseline-condition-v1` 将 ImageNet normalization 作为显式训练 / 推理开关，而不是隐含默认；使用 checkpoint 时必须同步 `training_config.json` 和闭环 env。闭环 agent 现在会读取训练 checkpoint metadata，默认拒绝 `image_normalization / model_image_height / model_image_width` 不一致的运行。
 
 ## 后续工程项
 
@@ -168,6 +168,14 @@ full baseline-basic 训练和评测沿用旧预处理主线：`256x1024`、`DIFF
    export DIFFUSIONDRIVE_JPEG_ARTIFACT=1
    export DIFFUSIONDRIVE_IMAGE_NORMALIZATION=imagenet
    ```
+
+   只有在明确做诊断时才允许绕过校验：
+
+   ```bash
+   export DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH=1
+   ```
+
+   绕过校验的闭环结果不能作为正式 baseline。
    目标先只验证不崩溃和 shape 正确，不用立刻判断性能优劣。
 
 4. 小规模 A/B：

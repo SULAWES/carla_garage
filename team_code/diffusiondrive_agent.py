@@ -11,8 +11,11 @@ Env vars:
   - DIFFUSIONDRIVE_LIDAR_POS / DIFFUSIONDRIVE_LIDAR_ROT: override online LiDAR pose, "x,y,z".
   - DIFFUSIONDRIVE_CROP_IMAGE: override image crop flag (0/1).
   - DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT / DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH: override model input size.
-  - DIFFUSIONDRIVE_USE_ROUTE_CONDITION: feed target_point/target_point_next route token (default: 1).
+  - DIFFUSIONDRIVE_USE_ROUTE_CONDITION: feed target_point/target_point_next route token
+    values (default: 1); 0 keeps the model token but zeros its values for ablation.
   - DIFFUSIONDRIVE_USE_SPEED_HEAD: use predicted target speed for longitudinal control (default: 0).
+  - DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT: allow missing/mismatched model tensors (default: 0).
+  - DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH: allow checkpoint preprocessing metadata mismatch (default: 0).
   - DIFFUSIONDRIVE_ZERO_LIDAR: replace LiDAR BEV with zeros for diagnostic ablation (default: 0).
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
@@ -139,6 +142,8 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.zero_lidar = strtobool(os.environ.get("DIFFUSIONDRIVE_ZERO_LIDAR", "0"))
         self.use_route_condition = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_ROUTE_CONDITION", "1"))
         self.use_speed_head_controller = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_SPEED_HEAD", "0"))
+        self.allow_partial_checkpoint = strtobool(os.environ.get("DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT", "0"))
+        self.allow_preprocess_mismatch = strtobool(os.environ.get("DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH", "0"))
         self.use_command_delay = strtobool(os.environ.get("DIFFUSIONDRIVE_COMMAND_DELAY", "0"))
         self.use_spatial_pid = strtobool(os.environ.get(
             "DIFFUSIONDRIVE_SPATIAL_PID",
@@ -190,8 +195,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive route debug:", self.debug_route)
         print("DiffusionDrive safety-box debug:", self.debug_safety_box)
         print("DiffusionDrive zero LiDAR:", self.zero_lidar)
-        print("DiffusionDrive route condition token:", self.use_route_condition)
+        print("DiffusionDrive route condition values:", self.use_route_condition)
         print("DiffusionDrive speed-head longitudinal control:", self.use_speed_head_controller)
+        print("DiffusionDrive allow partial checkpoint:", self.allow_partial_checkpoint)
+        print("DiffusionDrive allow preprocessing mismatch:", self.allow_preprocess_mismatch)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
@@ -331,6 +338,8 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         state_dict, source_name = self._extract_checkpoint_state_dict(checkpoint)
         filtered_state_dict, load_summary = self._align_checkpoint_state_dict(state_dict)
+        self._validate_checkpoint_metadata(checkpoint, ckpt_path)
+        self._validate_checkpoint_load_summary(load_summary, ckpt_path)
         self.model.load_state_dict(filtered_state_dict, strict=False)
 
         print(
@@ -352,6 +361,80 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                 "Model tensors left uninitialized by checkpoint "
                 f"({len(load_summary['missing_keys'])}): {load_summary['missing_keys'][:10]}"
             )
+
+    def _validate_checkpoint_metadata(self, checkpoint, ckpt_path: str) -> None:
+        if not isinstance(checkpoint, dict):
+            return
+
+        args = checkpoint.get("args")
+        dd_config = checkpoint.get("diffusiondrive_config")
+        mismatches = []
+
+        if isinstance(args, dict):
+            expected_normalization = args.get("image_normalization")
+            if expected_normalization is not None and str(expected_normalization).lower() != self.image_normalization:
+                mismatches.append(
+                    "image_normalization: "
+                    f"checkpoint={expected_normalization!r} runtime={self.image_normalization!r}"
+                )
+
+            expected_height = args.get("model_image_height")
+            expected_width = args.get("model_image_width")
+            if expected_height is not None and int(expected_height) != int(self.dd_config.camera_height):
+                mismatches.append(
+                    f"model_image_height: checkpoint={expected_height!r} runtime={self.dd_config.camera_height!r}"
+                )
+            if expected_width is not None and int(expected_width) != int(self.dd_config.camera_width):
+                mismatches.append(
+                    f"model_image_width: checkpoint={expected_width!r} runtime={self.dd_config.camera_width!r}"
+                )
+
+        if isinstance(dd_config, dict):
+            expected_height = dd_config.get("camera_height")
+            expected_width = dd_config.get("camera_width")
+            if expected_height is not None and int(expected_height) != int(self.dd_config.camera_height):
+                mismatches.append(
+                    f"config.camera_height: checkpoint={expected_height!r} runtime={self.dd_config.camera_height!r}"
+                )
+            if expected_width is not None and int(expected_width) != int(self.dd_config.camera_width):
+                mismatches.append(
+                    f"config.camera_width: checkpoint={expected_width!r} runtime={self.dd_config.camera_width!r}"
+                )
+
+        if mismatches and not self.allow_preprocess_mismatch:
+            details = "; ".join(mismatches)
+            raise RuntimeError(
+                f"DiffusionDrive checkpoint preprocessing/config metadata does not match runtime: {ckpt_path}. "
+                f"{details}. Set DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH=1 only for explicit diagnostics."
+            )
+        if mismatches:
+            print(
+                "WARNING: DiffusionDrive checkpoint preprocessing/config metadata mismatch allowed: "
+                f"{'; '.join(mismatches)}",
+                flush=True,
+            )
+
+    def _validate_checkpoint_load_summary(self, load_summary: dict, ckpt_path: str) -> None:
+        if self.allow_partial_checkpoint:
+            return
+        if not load_summary["shape_mismatch"] and not load_summary["missing_keys"]:
+            return
+
+        details = []
+        if load_summary["shape_mismatch"]:
+            details.append(
+                f"shape_mismatch={len(load_summary['shape_mismatch'])} "
+                f"examples={load_summary['shape_mismatch'][:5]}"
+            )
+        if load_summary["missing_keys"]:
+            details.append(
+                f"missing_keys={len(load_summary['missing_keys'])} "
+                f"examples={load_summary['missing_keys'][:5]}"
+            )
+        raise RuntimeError(
+            f"DiffusionDrive checkpoint is not fully compatible with the current model: {ckpt_path}. "
+            f"{'; '.join(details)}. Set DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT=1 only for warm-start ablations."
+        )
 
     def _extract_checkpoint_state_dict(self, checkpoint):
         if isinstance(checkpoint, dict):

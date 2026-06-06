@@ -36,7 +36,7 @@
 - sample distribution stats：`--dataset-stats-max-samples` 会落盘 `train_sample_distribution.json` / `validation_sample_distribution.json` / `eval_sample_distribution.json`
 - dataloader / manifest：`--sample-manifest`、`--val-sample-manifest`、`--rebuild-sample-manifest`、`--prefetch-factor`、`--persistent-workers`；CPU-only manifest builder 支持 `--quality-filter none|soft_clean|syb_clean`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--image-normalization none|imagenet`、`--no-jpeg-artifact`
-- evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载
+- evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载；闭环 agent 默认拒绝部分加载或 preprocessing metadata mismatch
 
 ## Optimizer Param Groups
 
@@ -142,7 +142,7 @@ status_token = command_one_hot(6) + speed(1)
 route_condition_token = target_point(2) + target_point_next(2)
 ```
 
-`status_token` 继续复用当前 status builder；`route_condition_token` 由训练侧从 measurements / manifest 读取并缓存 `target_point`、`target_point_next`，推理侧复用 `DiffusionDriveAgent.tick()` 计算出的 ego-frame route target。该改动改变模型接口和 checkpoint 兼容性，应作为 full retrain 实验处理。
+`status_token` 继续复用当前 status builder；`route_condition_token` 由训练侧从 measurements / manifest 读取并缓存 `target_point`、`target_point_next`，推理侧复用 `DiffusionDriveAgent.tick()` 计算出的 ego-frame route target。该改动改变模型接口和 checkpoint 兼容性，应作为 full retrain 实验处理。`DIFFUSIONDRIVE_USE_ROUTE_CONDITION=0` 只会把 route token 的输入值置零做 ablation，不会移除模型里的 route token 或恢复旧 checkpoint 结构。
 
 `SpeedHead-v1` 已接入：dataset / manifest 输出 `target_speed`、`brake`、`target_speed_twohot`、`target_speed_class`、`target_speed_label_valid`；模型新增独立 speed query 和 MLP head；训练记录 `target_speed_loss`、`target_speed_accuracy`、`target_speed_brake_accuracy`、`target_speed_l1`。推理侧新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller，默认关闭，空间 PID desired speed 仍是 fallback。
 
@@ -409,21 +409,22 @@ manifest builder 可选 route-level quality filter：
 
 `soft_clean` 在当前 B2D Full 统计中几乎等价于 full，只去掉少量 `missing_results`，适合作为下一轮 `baseline-condition-v1` 主线。`syb_clean` 会明显削减 brake / class-0 / hard interaction 场景样本，建议先作为 ablation，而不是默认主线。filter 写入 manifest header 的 `quality_filter` 字段；训练时仍通过 `--sample-manifest` 读取该 JSONL。
 
-验证集 manifest 单独构建：
+验证集 manifest 单独构建；如果训练 manifest 使用了 `--skip-first-frames 25`，验证 manifest 也建议显式使用同样参数。若确实要评估不跳过开头帧，可在训练 / eval 命令中加 `--val-skip-first-frames 0` 并使用对应 manifest。
 
 ```bash
 python tools/build_diffusiondrive_manifest.py \
   --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
   --route-glob "*" \
-  --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
+  --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25.jsonl \
   --frame-sampling 5 \
+  --skip-first-frames 25 \
   --max-samples 1024 \
   --num-workers 16 \
   --rebuild \
   --verify-load
 ```
 
-`--num-workers` 是 CPU 多进程数，只用于并行读取 annotation 和构造 trajectory target / route condition / speed labels；不要把它和训练 DataLoader 的 `--num-workers` 混淆。预构建 manifest 时的 `root-dir / route-glob / frame-sampling / skip-first-frames / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 必须和后续 GPU 训练保持一致。
+`--num-workers` 是 CPU 多进程数，只用于并行读取 annotation 和构造 trajectory target / route condition / speed labels；不要把它和训练 DataLoader 的 `--num-workers` 混淆。预构建 manifest 时的 `root-dir / route-glob / frame-sampling / skip-first-frames / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 必须和后续 GPU 训练保持一致。当前 condition-v1 loader 要求 manifest header 和每条 record 都包含 `target_speed_label` 与 `route_condition_feature`；旧 manifest 不再静默 fallback 到逐样本读取 annotation，应直接重建。
 
 ## Eval Error Inspection
 
@@ -435,15 +436,19 @@ python tools/build_diffusiondrive_manifest.py \
 conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
   --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
   --route-glob "*" \
-  --sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl \
-  --checkpoint ~/ltr/dd_logs/full_stage2/balanced_spatial_path_bs16_256ps/latest.pth \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25.jsonl \
+  --checkpoint ~/ltr/dd_logs/full_baseline_condition_v1/soft_clean_fs5_skip25_imgnet/latest.pth \
   --top-k 50 \
   --max-samples 1024 \
   --frame-sampling 5 \
+  --skip-first-frames 25 \
+  --model-image-height 384 \
+  --model-image-width 1024 \
+  --image-normalization imagenet \
   --batch-size 16 \
   --num-workers 6 \
   --device cuda:0 \
-  --output-csv ~/ltr/dd_logs/full_eval_stage2/nsj_left_errors.csv
+  --output-csv ~/ltr/dd_logs/full_baseline_condition_v1/soft_clean_fs5_skip25_imgnet/nsj_left_errors.csv
 ```
 
 输出包括 `l1 / ade / fde` 的 mean / median / p90 / p95 / max，以及 top-k 样本的 `scenario / route / frame / speed / command / target_path_length / target_end / pred_end`。
@@ -459,6 +464,7 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - 推理侧 `DiffusionDriveAgent` 默认启用空间 checkpoint PID，不再从 waypoint index 的 0.5s / 1.0s 时间假设估计 desired speed；可用 `DIFFUSIONDRIVE_SPATIAL_PID=0` 临时回到旧逻辑做 A/B。
 - 空间 PID 的速度和转弯阈值已支持 env 覆盖：`DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST`、`DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW`、`DIFFUSIONDRIVE_SPATIAL_PID_TURN_THRESHOLD`、`DIFFUSIONDRIVE_SPATIAL_PID_SHARP_TURN_THRESHOLD`；未设置时继续使用 `GlobalConfig` 默认值。
 - 推理侧 predicted-speed controller 已支持 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1`，用模型 `target_speed_logits` 的期望速度替代空间 PID 的 longitudinal desired speed；默认 `0` 保持空间 PID fallback。闭环 debug 会打印 `speed_head_class / speed_head_desired / speed_head_brake_prob`。
+- 闭环 agent 默认要求 checkpoint 与当前模型结构完全匹配，并校验训练 checkpoint 中的 `image_normalization / model_image_height / model_image_width` metadata。仅在 warm-start 或部署诊断时设置 `DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT=1` 或 `DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH=1`，正式结果中必须记录这些 env。
 - 推理侧默认使用当前 `far_command.value` 构造 `status_feature`，与训练侧当前 command 语义对齐；可用 `DIFFUSIONDRIVE_COMMAND_DELAY=1` 启用旧 garage / `sensor_agent.py` 的 `commands[-2]` 延迟逻辑做 A/B。
 - 推理侧新增 `DIFFUSIONDRIVE_LOW_SPEED_STEER=1` 闭环 A/B 开关：低速近似静止但未 brake 时保留横向 PID angle，默认 `0` 以保持 baseline 行为；该开关用于验证低速起步直行是否导致 route deviation。
 - stuck recovery 已支持 env 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD`、`DIFFUSIONDRIVE_CREEP_DURATION`、`DIFFUSIONDRIVE_CREEP_THROTTLE`；未设置时继续使用 `GlobalConfig` 默认值。

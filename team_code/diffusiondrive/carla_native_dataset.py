@@ -174,9 +174,11 @@ class Bench2DriveDiffusionDataset(Dataset):
             speed_target = target_speed_metadata_from_record(metadata, fallback_speed=speed)
             route_condition_values = metadata.get("route_condition_feature")
             if route_condition_values is None:
-                route_condition = build_route_condition_feature(load_annotation(route_dir, frame))
-            else:
-                route_condition = torch.tensor(route_condition_values, dtype=torch.float32)
+                raise RuntimeError(
+                    f"Sample manifest metadata is missing route_condition_feature: route={route_dir} frame={frame}. "
+                    "Rebuild the manifest with tools/build_diffusiondrive_manifest.py."
+                )
+            route_condition = torch.tensor(route_condition_values, dtype=torch.float32)
             return route_dir, frame, command, speed, trajectory, speed_target, route_condition
 
         annotation = load_annotation(route_dir, frame)
@@ -212,6 +214,21 @@ class Bench2DriveDiffusionDataset(Dataset):
                     continue
                 route_dir = Path(record["route_dir"])
                 frame = int(record["frame"])
+                required_record_fields = (
+                    "target_speed",
+                    "brake",
+                    "target_speed_class",
+                    "target_speed_twohot",
+                    "target_speed_label_valid",
+                    "route_condition_feature",
+                )
+                missing_record_fields = [field for field in required_record_fields if field not in record]
+                if missing_record_fields:
+                    raise RuntimeError(
+                        f"Sample manifest record is missing current condition-v1 fields in {manifest_path}: "
+                        f"route={route_dir} frame={frame} missing={missing_record_fields}. "
+                        "Rebuild the manifest with tools/build_diffusiondrive_manifest.py."
+                    )
                 samples.append((route_dir, frame))
                 metadata.append({
                     "command": int(record["command"]),
@@ -242,6 +259,23 @@ class Bench2DriveDiffusionDataset(Dataset):
         if header.get("format") != "diffusiondrive_sample_manifest_v1":
             raise RuntimeError(
                 f"Unsupported sample manifest format in {manifest_path}: {header.get('format')!r}"
+            )
+
+        target_speed_header = header.get("target_speed_label")
+        if not isinstance(target_speed_header, dict) or target_speed_header.get("schema") != TARGET_SPEED_LABEL_SCHEMA:
+            raise RuntimeError(
+                f"Sample manifest is missing current target speed label metadata: {manifest_path}. "
+                "Rebuild the manifest with tools/build_diffusiondrive_manifest.py."
+            )
+        route_condition_header = header.get("route_condition_feature")
+        if (
+            not isinstance(route_condition_header, dict)
+            or route_condition_header.get("schema") != ROUTE_CONDITION_FEATURE_SCHEMA
+            or int(route_condition_header.get("dim", -1)) != ROUTE_CONDITION_FEATURE_DIM
+        ):
+            raise RuntimeError(
+                f"Sample manifest is missing current route condition metadata: {manifest_path}. "
+                "Rebuild the manifest with tools/build_diffusiondrive_manifest.py."
             )
 
         expected = {

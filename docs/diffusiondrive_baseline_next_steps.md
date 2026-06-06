@@ -82,6 +82,7 @@ rgb/*.jpg
 - `--b2d-source-image-height/width` 目前主要用于记录 `training_config.json`，实际像素处理以读到的图片和 `GlobalConfig.camera_width/height` 为准。
 - 当前训练侧没有 CLI 参数直接覆盖 `GlobalConfig.crop_image`、`camera_fov`、`camera_pos` 或 `camera_height/width`。
 - 当前训练侧已有 ImageNet normalization 路径；`baseline-condition-v1` 建议显式使用 `--image-normalization imagenet`，推理侧同步 `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=imagenet`。
+- 闭环 agent 默认会校验 checkpoint 中的 `image_normalization / model_image_height / model_image_width`，并拒绝部分加载造成的随机层混入。`DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT=1` 和 `DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH=1` 只用于 warm-start / 部署诊断，不应出现在正式 baseline。
 
 推理侧 sensor 定义在 `DiffusionDriveAgent.sensors()`，实际使用：
 
@@ -601,6 +602,7 @@ route_condition_token = target_point(2) + target_point_next(2)
 - 推理侧已复用 `DiffusionDriveAgent.tick()` 计算出的 ego-frame `target_point`、`target_point_next`。
 - 模型侧保留现有 `status_token`，新增 `route_condition_token` encoder；decoder memory 现在包含 BEV token + status token + route condition token。
 - 该改动改变模型接口，必须作为 full retrain 实验处理；不建议直接从 baseline-basic checkpoint 继续训练，除非显式跳过新增层并标注为 warm-start ablation。
+- `DIFFUSIONDRIVE_USE_ROUTE_CONDITION=0` 只是把 route token 输入值置零，不会移除 route token 结构，也不能用于加载旧 checkpoint。
 
 ## 评测门槛
 
@@ -656,7 +658,7 @@ notes:
 
 ## 当前推荐优先级
 
-1. 构建 `baseline-condition-v1` soft-clean manifest：`--frame-sampling 5 --skip-first-frames 25 --quality-filter soft_clean`。
+1. 构建 `baseline-condition-v1` soft-clean manifest：`--frame-sampling 5 --skip-first-frames 25 --quality-filter soft_clean`；manifest 必须包含 `target_speed_label` 与 `route_condition_feature` metadata，旧 manifest 需要重建。
 2. 从头训练 `baseline-condition-v1`：`384x1024`、`--image-normalization imagenet`、SpeedHead-v1、route condition token。
 3. open-loop all-scenarios 检查 trajectory 与 speed metrics，尤其关注 `target_speed_l1` 和 brake accuracy。
 4. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。

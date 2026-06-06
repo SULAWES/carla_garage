@@ -77,10 +77,12 @@
   - [x] 新增 `tools/build_diffusiondrive_manifest.py`，支持 CPU-only 作业并行预构建 train / val manifest，避免 GPU 作业等待缓存生成
   - [x] manifest builder 支持 `--quality-filter none|soft_clean|syb_clean`，可直接构建 full / soft-clean / syb-clean 训练样本缓存
   - [x] `tools/inspect_diffusiondrive_eval_errors.py` 支持 `--sample-manifest`，eval CSV 诊断可复用训练 / 验证同一份缓存样本列表
+  - [x] `tools/inspect_diffusiondrive_eval_errors.py` 已补齐 `--skip-first-frames`、`--model-image-height/width` 和 `--image-normalization`，避免 condition-v1 诊断脚本沿用旧 `256x1024` 默认
   - [x] DataLoader worker 会限制 OpenCV / torch 内部线程，并支持 `--prefetch-factor` 与可选 `--persistent-workers`
   - [x] 远端 CPU 瓶颈优化已落到文档主线：manifest 只缓存样本元数据和 trajectory target，不缓存图像 / LiDAR；DataLoader worker 配合 `OMP_NUM_THREADS=1` 等环境变量避免在 7 CPU 核限制下过度抢线程
   - [x] 输出目录落盘 `training_config.json`，记录 CLI、DiffusionDrive config、数据 split、预处理和 status feature schema
   - [x] `training_config.json` 记录 B2D Full dataset mode、target mode、空间 checkpoint 采样、frame interval 假设、anchor shape 和 sensor contract
+  - [x] condition-v1 manifest loader 默认要求 `target_speed_label` 与 `route_condition_feature` metadata，不再对旧 manifest 静默逐样本 fallback
   - [x] 已完成 full baseline-basic 训练，作为论文 baseline 和后续持续学习工作的干净基础；Stage5 / Stage6 tuned hard-weight checkpoint 只作为 ablation / 改进参考
   - [x] 已完成 baseline-basic full-scenario open-loop 和 Bench2Drive 220 closed-loop 汇总，并归档到本地 `dd_logs/eval_summaries`
   - [ ] 后续仍需把实验配置从 CLI-only 进一步整理成可复用 config 文件或 launch preset

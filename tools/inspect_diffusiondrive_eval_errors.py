@@ -61,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--frame-sampling", type=int, default=5)
+    parser.add_argument("--skip-first-frames", type=int, default=0)
     parser.add_argument("--sample-manifest", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -71,8 +72,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spatial-target-first-distance", type=float, default=2.5)
     parser.add_argument("--spatial-target-interval", type=float, default=1.0)
     parser.add_argument("--spatial-target-max-future-frames", type=int, default=120)
-    parser.add_argument("--model-image-height", type=int, default=256)
+    parser.add_argument("--model-image-height", type=int, default=384)
     parser.add_argument("--model-image-width", type=int, default=1024)
+    parser.add_argument("--image-normalization", choices=("none", "imagenet"), default="none")
     parser.add_argument("--no-jpeg-artifact", action="store_true")
     parser.add_argument("--balanced-scenarios", action="store_true")
     parser.add_argument("--max-samples-per-scenario", type=int, default=None)
@@ -257,6 +259,7 @@ def main() -> None:
         route_glob=args.route_glob,
         model_image_size=(dd_config.camera_height, dd_config.camera_width),
         jpeg_artifact=not args.no_jpeg_artifact,
+        image_normalization=args.image_normalization,
         target_mode=args.target_mode,
         spatial_target_first_distance=args.spatial_target_first_distance,
         spatial_target_interval=args.spatial_target_interval,
@@ -264,6 +267,7 @@ def main() -> None:
         balanced_scenarios=args.balanced_scenarios,
         max_samples_per_scenario=args.max_samples_per_scenario,
         sample_manifest_path=args.sample_manifest,
+        skip_first_frames=args.skip_first_frames,
     )
     dataloader = DataLoader(
         IndexedDataset(dataset),
