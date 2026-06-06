@@ -12,6 +12,7 @@ Env vars:
   - DIFFUSIONDRIVE_CROP_IMAGE: override image crop flag (0/1).
   - DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT / DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH: override model input size.
   - DIFFUSIONDRIVE_USE_ROUTE_CONDITION: feed target_point/target_point_next route token (default: 1).
+  - DIFFUSIONDRIVE_USE_SPEED_HEAD: use predicted target speed for longitudinal control (default: 0).
   - DIFFUSIONDRIVE_ZERO_LIDAR: replace LiDAR BEV with zeros for diagnostic ablation (default: 0).
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
@@ -60,6 +61,10 @@ from birds_eye_view.run_stop_sign import RunStopSign
 
 _UKF_INITIAL_COVARIANCE = np.diag([0.5, 0.5, 0.000001, 0.000001])
 _UKF_MIN_COVARIANCE_EIGENVALUE = 1e-9
+_TARGET_SPEED_CLASSES_MPS = torch.tensor(
+    [0.0, 4.0, 8.0, 10.0, 13.88888888, 16.0, 17.77777777, 20.0],
+    dtype=torch.float32,
+)
 
 
 # Leaderboard function that selects the class used as agent.
@@ -133,6 +138,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive image normalization:", self.image_normalization)
         self.zero_lidar = strtobool(os.environ.get("DIFFUSIONDRIVE_ZERO_LIDAR", "0"))
         self.use_route_condition = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_ROUTE_CONDITION", "1"))
+        self.use_speed_head_controller = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_SPEED_HEAD", "0"))
         self.use_command_delay = strtobool(os.environ.get("DIFFUSIONDRIVE_COMMAND_DELAY", "0"))
         self.use_spatial_pid = strtobool(os.environ.get(
             "DIFFUSIONDRIVE_SPATIAL_PID",
@@ -185,6 +191,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive safety-box debug:", self.debug_safety_box)
         print("DiffusionDrive zero LiDAR:", self.zero_lidar)
         print("DiffusionDrive route condition token:", self.use_route_condition)
+        print("DiffusionDrive speed-head longitudinal control:", self.use_speed_head_controller)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
@@ -251,6 +258,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         self.last_route_debug = {}
         self.last_safety_box_debug = {}
+        self.last_speed_head_debug = {"available": False}
 
     def _apply_runtime_sensor_overrides(self) -> None:
         """Apply online sensor/preprocessing overrides before data/model setup."""
@@ -619,12 +627,15 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         target_point_next = tick_data.get('target_point_next', target_point)
         return torch.cat([target_point, target_point_next], dim=1).to(self.device, dtype=torch.float32)
 
-    def _control_pid(self, waypoints, speed, route_points_ego=None):
+    def _control_pid(self, waypoints, speed, route_points_ego=None, desired_speed_override=None):
         waypoints = waypoints[0].detach().cpu().numpy()
         speed = float(speed)
 
         endpoint_distance, turn_ratio = self._spatial_path_geometry(waypoints)
-        if self.use_spatial_pid:
+        if desired_speed_override is not None:
+            desired_speed = max(float(desired_speed_override), 0.0)
+            pid_mode = "speed_head"
+        elif self.use_spatial_pid:
             desired_speed = self._spatial_path_desired_speed(waypoints)
             pid_mode = "spatial"
         else:
@@ -685,6 +696,27 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             "low_speed_steer": bool(self.low_speed_steer),
         }
         return steer, throttle, brake
+
+    def _predicted_target_speed(self, outputs):
+        logits = outputs.get("target_speed_logits")
+        if logits is None:
+            self.last_speed_head_debug = {"available": False}
+            return None
+
+        probs = torch.softmax(logits[0], dim=-1).detach().cpu()
+        class_speeds = _TARGET_SPEED_CLASSES_MPS.to(dtype=probs.dtype)
+        pred_class = int(torch.argmax(probs).item())
+        expected_speed = float(torch.sum(probs * class_speeds).item())
+        if pred_class == 0:
+            expected_speed = 0.0
+        self.last_speed_head_debug = {
+            "available": True,
+            "pred_class": pred_class,
+            "desired_speed": expected_speed,
+            "brake_prob": float(probs[0].item()),
+            "max_prob": float(torch.max(probs).item()),
+        }
+        return expected_speed
 
     def _spatial_path_geometry(self, waypoints):
         if waypoints.shape[0] == 0:
@@ -993,7 +1025,13 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         waypoints = traj
 
         speed = tick_data['speed'].item()
-        steer, throttle, brake = self._control_pid(waypoints, speed, tick_data.get('route_points_ego'))
+        desired_speed_override = self._predicted_target_speed(outputs) if self.use_speed_head_controller else None
+        steer, throttle, brake = self._control_pid(
+            waypoints,
+            speed,
+            tick_data.get('route_points_ego'),
+            desired_speed_override=desired_speed_override,
+        )
         stop_for_stop_sign = self._stop_sign_controller_step(speed)
 
         # Restart mechanism in case the car got stuck.
@@ -1054,6 +1092,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         command_debug = getattr(self, "last_command_debug", {})
         pid_debug = getattr(self, "last_pid_debug", {})
         route_debug = getattr(self, "last_route_debug", {})
+        speed_head_debug = getattr(self, "last_speed_head_debug", {})
         print(
             "[DiffusionDriveControl] "
             f"step={self.step} "
@@ -1075,6 +1114,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"route_dist={route_debug.get('distance', float('nan')):.3f} "
             f"route_angle={route_debug.get('angle_diff_deg', float('nan')):.3f} "
             f"route_warning={route_debug.get('warning')} "
+            f"speed_head={speed_head_debug.get('available', False)} "
+            f"speed_head_class={speed_head_debug.get('pred_class')} "
+            f"speed_head_desired={speed_head_debug.get('desired_speed', float('nan')):.3f} "
+            f"speed_head_brake_prob={speed_head_debug.get('brake_prob', float('nan')):.3f} "
             f"control=(steer={float(self.control.steer):.3f},"
             f"throttle={float(self.control.throttle):.3f},"
             f"brake={float(self.control.brake):.3f}) "
