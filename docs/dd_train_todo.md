@@ -27,7 +27,7 @@
 
 - [ ] **训练输入定义冻结**
   - [x] 明确相机输入方案：第一阶段采用 CARLA-native 单前视，不采用 NAVSIM 三相机拼接
-  - [x] 明确图像裁剪 / resize / normalize 方案：`512x1024 -> crop_array 384x1024 -> resize 256x1024 -> [0,1]`，默认无 ImageNet normalization
+  - [x] 明确图像裁剪 / resize / normalize 方案：`512x1024 -> crop_array 384x1024 -> model input 384x1024 -> [0,1] -> optional ImageNet normalization`
   - [x] 明确 LiDAR 输入通道定义：沿用 garage histogram，默认 `use_ground_plane=False`，每帧 `1` 个 above-split 通道；多帧时按 `lidar_seq_len` 拼接
   - [x] 记录旧 `status_feature` 事实：`command_one_hot(6) + velocity(speed,0) + acceleration(accel_x,0)`，共 `10` 维
   - [x] 记录 `extra_sensors` 来源：garage / syb 旧模型中为 `speed(1) + command_one_hot(6)` 的低维条件 token
@@ -95,33 +95,33 @@
   - [x] 训练 / 推理默认统一使用当前 command；推理侧旧 `commands[-2]` 延迟逻辑保留为 `DIFFUSIONDRIVE_COMMAND_DELAY=1` fallback
   - [x] 将训练侧和推理侧改为共用同一份 status builder，避免 schema 分叉
   - [x] 迁移时删除 / 废弃 acceleration 输入；旧实现中训练用 IMU `acceleration[0]`、推理用 speed finite difference，二者不一致
-  - [ ] 下一轮 `baseline-condition-v1` 中保留该 7 维输入作为 `status_token`，不要恢复旧 `extra_sensors`
+  - [x] `baseline-condition-v1` 中保留该 7 维输入作为 `status_token`，不恢复旧 `extra_sensors`
   - [ ] 明确 speed 是否归一化；syb 旧模型通过 `BatchNorm1d(1, affine=False)` 处理速度，DD 迁移时需要单独决策
 
 - [ ] **`SpeedHead-v1` 显式速度 / 刹车语义**
   - [x] 扩展 raw B2D sample discovery / manifest，缓存 `target_speed`、`brake`，并在 header 中记录 speed label schema
   - [x] dataset batch 的 `targets` 已输出 `target_speed`、`brake`、`target_speed_twohot`、`target_speed_class`、`target_speed_label_valid`
-  - [ ] 采用 syb 风格 speed bins 作为第一版：`[0.0, 4.0, 8.0, 10.0, 13.8889, 16.0, 17.7778, 20.0]`，其中 `0.0` 类承担 brake / stop 语义
-  - [ ] 在 DiffusionDrive 模型中新增 speed/brake head；第一版可从 fused feature / ego query / status token 接 MLP，不改 diffusion trajectory head
-  - [ ] 训练入口新增 speed loss 权重、speed classification / brake accuracy / target speed MAE 日志
-  - [ ] 推理侧新增 predicted-speed longitudinal controller，保留当前 spatial PID desired speed 作为 fallback / ablation
+  - [x] 采用 syb 风格 speed bins 作为第一版：`[0.0, 4.0, 8.0, 10.0, 13.8889, 16.0, 17.7778, 20.0]`，其中 `0.0` 类承担 brake / stop 语义
+  - [x] 在 DiffusionDrive 模型中新增独立 speed query + MLP head，不改 diffusion trajectory head
+  - [x] 训练入口新增 `--speed-loss-weight`、`target_speed_loss`、`target_speed_accuracy`、`target_speed_brake_accuracy`、`target_speed_l1`
+  - [x] 推理侧新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller，保留当前 spatial PID desired speed 作为 fallback / ablation
   - [ ] 将 run 命名为 `baseline-condition-v1` 或更具体的 `speedhead_v1_*`，避免和已完成的 `baseline-basic` 混淆
 
-- [ ] **两个 condition token 的 route conditioning**
-  - [ ] 模型接口改为两个低维 condition token：`status_token=command_one_hot(6)+speed(1)`，`route_condition_token=target_point(2)+target_point_next(2)`
-  - [ ] 不做 11 维 flat `status_feature`，也不恢复旧 garage / syb 的独立 `extra_sensors` 分支
-  - [ ] 训练侧从 measurements / manifest 读取并缓存 `target_point`、`target_point_next`，保证与 trajectory target 同为 ego-frame meter 语义
-  - [ ] 推理侧复用 `DiffusionDriveAgent.tick()` 已计算的 ego-frame `target_point`、`target_point_next`
-  - [ ] 在 `training_config.json` 中记录 condition token schema、维度、是否归一化和 checkpoint 兼容策略
-  - [ ] 该改动改变模型接口，必须 full retrain；如 warm-start baseline-basic，需要显式跳过新增层并在 run notes 中标注
+- [x] **两个 condition token 的 route conditioning**
+  - [x] 模型接口改为两个低维 condition token：`status_token=command_one_hot(6)+speed(1)`，`route_condition_token=target_point(2)+target_point_next(2)`
+  - [x] 不做 11 维 flat `status_feature`，也不恢复旧 garage / syb 的独立 `extra_sensors` 分支
+  - [x] 训练侧从 measurements / manifest 读取并缓存 `target_point`、`target_point_next`
+  - [x] 推理侧复用 `DiffusionDriveAgent.tick()` 已计算的 ego-frame `target_point`、`target_point_next`
+  - [x] 在 `training_config.json` 中记录 condition token schema 和维度
+  - [x] 已明确该改动改变模型接口，必须 full retrain；如 warm-start baseline-basic，需要显式跳过新增层并在 run notes 中标注
 
 - [ ] **图像预处理方案验证**
   - [x] 记录当前推理侧图像预处理事实，见 `diffusiondrive_input_preprocessing.md`
-  - [x] 冻结第一阶段 CARLA-native 图像预处理主线：单前视、去底部裁剪、`[0,1]`、默认 JPEG artifact、无 ImageNet normalization
+  - [x] `baseline-condition-v1` 输入主线改为单前视、去底部裁剪、`384x1024` 模型输入、默认 JPEG artifact，并支持训练/推理 ImageNet normalization 开关
   - [x] 明确 B2D Full raw 是当前主训练分布，见 `b2d_full_sensor_contract.md`
-  - [ ] 验证 raw Bench2Drive `1600x900, fov=70, camera x=0.8,z=1.6` resize 到 garage `512x1024, fov=110, camera x=-1.5,z=2.0` 是否可接受
+  - [x] 修正 B2D source image size 记录：当前远端训练文件实际为 `512x1024`，训练参数默认已改为 `--b2d-source-image-height 512 --b2d-source-image-width 1024`
   - [ ] 评估 JPEG artifact 是否需要保留
-  - [ ] 评估是否需要 ImageNet mean/std normalization
+  - [ ] 评估 `--image-normalization imagenet` 对 open-loop / closed-loop 的影响
   - [ ] 评估单前视与多相机的收益差异
 
 - [ ] **LiDAR 表征方案验证**
@@ -284,7 +284,7 @@
 
 - 继续用 CARLA-native 单前视相机。
 - 不按 NAVSIM 三相机拼接作为当前主线。
-- 在线传感器保持 `512x1024`，裁剪为 `384x1024`，再 resize 到模型输入 `256x1024`。
+- 在线传感器保持 `512x1024`，裁剪为 `384x1024`，当前 `baseline-condition-v1` 默认模型输入也是 `384x1024`。
 - 训练侧必须与推理侧保持同一套裁剪、resize 和 normalization 语义。
 - 多相机拼接保留为后续单独实验，不能混入第一阶段训练基线。
 

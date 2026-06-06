@@ -62,7 +62,7 @@ rgb/*.jpg
 -> resize to GlobalConfig.camera_width x GlobalConfig.camera_height = 1024x512
 -> optional JPEG artifact
 -> crop_array(GlobalConfig): 512x1024 -> 384x1024
--> interpolate to --model-image-height x --model-image-width = 256x1024
+-> interpolate to --model-image-height x --model-image-width = 384x1024 for baseline-condition-v1
 -> [0,1] tensor
 ```
 
@@ -71,6 +71,7 @@ rgb/*.jpg
 ```text
 --model-image-height
 --model-image-width
+--image-normalization none|imagenet
 --no-jpeg-artifact
 --b2d-source-image-height
 --b2d-source-image-width
@@ -80,7 +81,7 @@ rgb/*.jpg
 
 - `--b2d-source-image-height/width` 目前主要用于记录 `training_config.json`，实际像素处理以读到的图片和 `GlobalConfig.camera_width/height` 为准。
 - 当前训练侧没有 CLI 参数直接覆盖 `GlobalConfig.crop_image`、`camera_fov`、`camera_pos` 或 `camera_height/width`。
-- 当前训练侧没有 ImageNet normalization 路径，默认就是 `[0,1]`。
+- 当前训练侧已有 ImageNet normalization 路径；`baseline-condition-v1` 建议显式使用 `--image-normalization imagenet`，推理侧同步 `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=imagenet`。
 
 推理侧 sensor 定义在 `DiffusionDriveAgent.sensors()`，实际使用：
 
@@ -569,11 +570,12 @@ throttle/brake: predicted target_speed/brake + longitudinal controller
 
 这比继续从空间 checkpoint 间距反推 desired speed 更稳，也比马上切 time-based anchors 工程风险更低。
 
-### 待做
+### 当前实现状态
 
 - manifest / dataset 已缓存 `target_speed` 和 `brake`，并记录 syb two-hot speed label schema。
-- model 新增 speed/brake head 和 loss，先用 syb two-hot / CE 风格。
-- agent 推理侧新增可切换的 predicted-speed longitudinal controller；保留当前 spatial PID desired speed 作为 fallback。
+- model 已新增独立 speed query + MLP head；训练 loss 使用 `target_speed_twohot` masked soft cross entropy。
+- 训练日志已记录 `target_speed_loss`、`target_speed_accuracy`、`target_speed_brake_accuracy`、`target_speed_l1`。
+- agent 推理侧已新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller；默认关闭，当前 spatial PID desired speed 仍作为 fallback。
 - open-loop 先输出 speed classification / brake accuracy / target speed MAE，再只对少数候选跑 20-route。
 
 ## Route Condition Tokens
@@ -593,11 +595,11 @@ route_condition_token = target_point(2) + target_point_next(2)
 - 方便后续把 route token 升级为 route polyline encoder，而不破坏已有 status token。
 - 比 `command+speed+target_point+target_point_next` 的 11 维 flat status 更清楚，模型结构上也更容易解释。
 
-### 待做
+### 当前实现状态
 
-- 训练侧从 measurements / manifest 中缓存 `target_point`、`target_point_next`，并保证和 trajectory target 使用同一 ego-frame 语义。
-- 推理侧复用 `DiffusionDriveAgent.tick()` 已经计算的 ego-frame `target_point`、`target_point_next`。
-- 模型侧保留现有 `status_token`，新增 `route_condition_token` encoder；让 diffusion decoder 同时接收两个低维 condition token。
+- 训练侧已从 measurements / manifest 中缓存 `target_point`、`target_point_next`。
+- 推理侧已复用 `DiffusionDriveAgent.tick()` 计算出的 ego-frame `target_point`、`target_point_next`。
+- 模型侧保留现有 `status_token`，新增 `route_condition_token` encoder；decoder memory 现在包含 BEV token + status token + route condition token。
 - 该改动改变模型接口，必须作为 full retrain 实验处理；不建议直接从 baseline-basic checkpoint 继续训练，除非显式跳过新增层并标注为 warm-start ablation。
 
 ## 评测门槛
@@ -654,11 +656,10 @@ notes:
 
 ## 当前推荐优先级
 
-1. 继续实现 `SpeedHead-v1`：manifest / dataset 读取 `target_speed`、`brake` 已完成；下一步是模型新增 speed/brake head，训练记录 speed loss 和 open-loop speed metrics。
-2. 实现两个 condition token：保留 `status_token(command_one_hot+speed)`，新增 `route_condition_token(target_point+target_point_next)`，不要恢复旧 `extra_sensors` 分支，也不要先做 11 维 flat status。
-3. 训练前用 `tools/summarize_b2d_quality_filter.py` 统计 full / soft-clean / syb-clean 三套保留率、per-scenario 覆盖和 speed/brake label 分布，再决定 manifest filter 强度。
-4. 用选定的 B2D manifest 重新训练 `baseline-condition-v1`。重训成本可接受，优先用 open-loop all-scenarios 检查 trajectory 与 speed metrics。
-5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。
-6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
-7. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
-8. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。
+1. 构建 `baseline-condition-v1` soft-clean manifest：`--frame-sampling 5 --skip-first-frames 25 --quality-filter soft_clean`。
+2. 从头训练 `baseline-condition-v1`：`384x1024`、`--image-normalization imagenet`、SpeedHead-v1、route condition token。
+3. open-loop all-scenarios 检查 trajectory 与 speed metrics，尤其关注 `target_speed_l1` 和 brake accuracy。
+4. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。
+5. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
+6. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
+7. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。

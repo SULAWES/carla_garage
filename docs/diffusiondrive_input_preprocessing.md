@@ -19,8 +19,8 @@
 3. `BGR -> RGB`。
 4. 调用 `t_u.crop_array()`，即从原图顶部开始截取 `384 x 1024`，去掉底部 `128px`。
 5. 转成 `C,H,W`，保持像素值 `0..255`。
-6. 推理前除以 `255.0`，resize 到 DiffusionDrive 模型输入 `256 x 1024`。
-7. 默认不做 ImageNet mean/std normalization。
+6. 推理前除以 `255.0`，resize 到 DiffusionDrive 模型输入 `384 x 1024`。
+7. 默认不做 ImageNet mean/std normalization；`baseline-condition-v1` 训练建议显式使用 `imagenet` 做 syb-style input 对齐实验。
 
 当前可用运行时开关：
 
@@ -90,21 +90,21 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 
 1. 当前训练主线以 Bench2Drive Full raw 数据为主要训练分布，sensor contract 见 `b2d_full_sensor_contract.md`。模型输入仍保持单前视方案：
    - 单前视相机
-   - B2D Full raw 图像通常为 `900x1600`
+   - 远端当前 B2D Full 训练图像实际观测为 `512x1024`
    - 当前先 resize 到在线 garage sensor size `512x1024`
    - `crop_array(): 512x1024 -> 384x1024`
-   - resize 到 DiffusionDrive 模型输入 `256x1024`
-   - 输入数值范围 `[0, 1]`
-   - 默认不做 ImageNet mean/std normalization
+   - 默认模型输入保持 `384x1024`
+   - 输入数值范围先为 `[0, 1]`
+   - 训练和推理均支持 `none|imagenet` normalization；当前新一轮 syb-style input 实验建议使用 ImageNet mean/std
    - 默认保留 JPEG artifact
 
 2. 训练和推理应尽量共用同一套模型输入预处理语义，但必须显式记录 B2D Full raw sensor 与在线 garage sensor suite 的几何 gap。当前训练侧镜像 `DiffusionDriveAgent` 的模型输入路径：
    - `BGR -> RGB`
-   - raw `900x1600 -> 512x1024`
+   - source image -> `512x1024`
    - `crop_array(): 512x1024 -> 384x1024`
-   - resize 到 `256x1024`
+   - resize 到 `384x1024`
    - `/255.0`
-   - `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none`
+   - `--image-normalization none|imagenet` / `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none|imagenet`
 
 3. 现阶段不按 NAVSIM 三相机 crop 作为主线。NAVSIM 方案只保留为后续大实验选项，不能作为第一阶段 CARLA-native 训练的默认预处理。
 
@@ -125,12 +125,12 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 - 第一阶段正式继续单前视，不升级到 NAVSIM 式三相机拼接。
 - 第一阶段保持当前 CARLA / garage 去底部裁剪，不改成 NAVSIM 上下裁剪。
 - B2D Full 训练第一阶段保留 JPEG artifact，和当前在线推理默认路径一致。
-- CARLA 重新训练第一阶段不引入 ImageNet mean/std normalization。
+- `baseline-condition-v1` 将 ImageNet normalization 作为显式训练 / 推理开关，而不是隐含默认；使用 checkpoint 时必须同步 `training_config.json` 和闭环 env。
 
 ## 后续工程项
 
 - 训练数据加载、在线推理和可视化调试是否共用同一份预处理 helper，减少未来分叉。
-- B2D Full raw 是当前主训练分布；不能把 `900x1600 -> 512x1024 -> crop_array()` 视作几何等价于在线 sensor suite，只能视作当前明确记录的输入转换规则。
+- B2D Full raw 是当前主训练分布；不能把 source image resize 到 `512x1024` 后再 `crop_array()` 视作几何等价于在线 sensor suite，只能视作当前明确记录的输入转换规则。
 
 ## 最小测试计划
 
@@ -152,7 +152,7 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 
 ## 当前 baseline-basic 结论
 
-full baseline-basic 训练和评测仍沿用当前预处理主线：`DIFFUSIONDRIVE_JPEG_ARTIFACT=1`、`DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none`。结果显示：
+full baseline-basic 训练和评测沿用旧预处理主线：`256x1024`、`DIFFUSIONDRIVE_JPEG_ARTIFACT=1`、`DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none`。`baseline-condition-v1` 已切到 `384x1024`，并新增训练侧 `--image-normalization`，因此需要从头重训，不应和 baseline-basic checkpoint 直接比较闭环分数。baseline-basic 结果显示：
 
 - Open-loop all-scenarios `l1_mean=0.0192`，说明当前预处理足以支撑很低的离线轨迹误差。
 - Closed-loop Bench2Drive 220 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明闭环仍明显受控制、sensor gap、规则合规或交互行为影响。

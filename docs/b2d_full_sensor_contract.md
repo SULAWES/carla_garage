@@ -27,20 +27,22 @@ B2D Full 原生格式：
 
 远端 Full 数据通常是 scenario / route 两层结构，例如 `carla_dataset/Accident/Town13_.../`；训练时应使用 `--route-glob "*/*"`。
 
-当前已知 raw sensor 几何：
+当前已知 raw sensor 几何记录：
 
 - front camera: `1600x900, fov=70, x=0.8, y=0.0, z=1.6`
 - LiDAR: `x=-0.39, y=0.0, z=1.84, yaw=0, range=85`
 
+注意：远端当前用于 full training 的 B2D Full 图像文件实际观测为 `512x1024`，不是文档早期假设的 `1600x900` tensor。`1600x900, fov=70` 仍应作为原始采集 provenance 记录，但训练脚本的 `--b2d-source-image-height/width` 默认已修正为 `512/1024`。
+
 当前 dataset 会把 raw front image 转成模型输入：
 
-- raw image source size: `900x1600`
+- source image size: `512x1024`
 - resize 到在线 garage sensor size: `512x1024`
 - `crop_array(): 512x1024 -> 384x1024`
-- resize 到模型输入: `256x1024`
-- 数值范围: `[0,1]`
+- 默认模型输入: `384x1024`
+- 数值范围: `[0,1]`，随后可选 ImageNet mean/std normalization
 - 默认保留 JPEG artifact
-- 默认无 ImageNet normalization
+- 训练侧 `--image-normalization none|imagenet`，推理侧 `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none|imagenet`
 
 ## 在线 Garage Sensor Suite
 
@@ -57,7 +59,7 @@ B2D Full raw sensor 和在线 garage sensor suite 不完全一致：
 
 - camera FOV 不同：`70` vs `110`
 - camera pose 不同：B2D raw 在车前方，garage 在线相机在 `x=-1.5,z=2.0`
-- raw image aspect / source size 不同：`900x1600` vs 在线 `512x1024`
+- raw provenance / source tensor 记录需要区分：采集几何记录为 `1600x900`，当前训练文件实际为 `512x1024`
 - LiDAR pose / yaw / range 不同
 - 当前 resize / crop 只能对齐 tensor shape，不能消除真实几何 gap
 
@@ -109,6 +111,8 @@ anchor 估计语义：
 - `sensor_contract`
 - `preprocessing.source_image_size / online_sensor_size / model_image_size`
 - `status_feature`
+- `route_condition_token`
+- `speed_head`
 
 这些字段用于保证 checkpoint 和实验结果可以追溯到当时的 sensor / time / anchor 假设。
 
@@ -117,5 +121,6 @@ anchor 估计语义：
 1. full baseline-basic 已完成，B2D Full raw + scenario-balanced manifest 能支持全量训练，且 open-loop all-scenarios `l1_mean=0.0192`。
 2. 当前 closed-loop Bench2Drive 220 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明仅靠 B2D Full open-loop 轨迹误差不能保证闭环表现。
 3. 后续应抽样对比 raw image、preprocessed image、LiDAR BEV、target trajectory 和在线闭环失败帧，重点排查 route deviation / blocked / collisions 与 sensor contract gap 的关系。
-4. 针对空间 checkpoint target，推理侧已默认启用空间 PID；后续需要通过闭环 A/B 调参 slow / fast 速度、turn threshold、stuck / creep / safety box。
-5. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。
+4. `baseline-condition-v1` 已加入 `SpeedHead-v1` 和 `route_condition_token`，下一步应先重训并检查 open-loop trajectory / speed metrics，再跑 20-route 闭环。
+5. 针对空间 checkpoint target，推理侧仍保留空间 PID fallback；`DIFFUSIONDRIVE_USE_SPEED_HEAD=1` 可切到 predicted-speed longitudinal controller。
+6. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。

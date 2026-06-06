@@ -56,10 +56,11 @@
   - 脚本：`tools/smoke_diffusiondrive_b2d_mini.py`
   - 命令：`conda run -n garage_2 python tools/smoke_diffusiondrive_b2d_mini.py`
   - smoke 脚本已显式暴露 `--target-mode spatial_path|future_ego_time`；默认与训练入口一致为 `spatial_path`
-  - raw B2D mini 图像为 `900x1600`；当前 B2D Full raw 是主训练分布，输入转换见 `b2d_full_sensor_contract.md`
+  - raw B2D mini 图像可能仍为旧尺寸；当前远端 B2D Full 训练图像实际观测为 `512x1024`，输入转换见 `b2d_full_sensor_contract.md`
   - target mode：`spatial_path`
   - 从 future ego path 按 `2.5m, 3.5m, ..., 11.5m` 空间距离重采样 target：`(1, 10, 2)`
   - status feature：`(1, 7)`
+  - route condition feature：`(1, 4)`
   - 模型输出：`trajectory = (1, 10, 2)`
   - 最近一次结果：`loss = 17.09078598022461`，`grad_norm = 0.8400353789329529`
   - trajectory loss 为标量，backward 通过
