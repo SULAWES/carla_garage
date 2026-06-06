@@ -22,6 +22,8 @@ TARGET_MODE_SPATIAL_PATH = "spatial_path"
 TARGET_MODE_FUTURE_EGO_TIME = "future_ego_time"
 TARGET_SPEED_LABEL_SCHEMA = "syb_twohot_target_speed_v1"
 TARGET_SPEED_CLASSES_MPS = (0.0, 4.0, 8.0, 10.0, 13.88888888, 16.0, 17.77777777, 20.0)
+ROUTE_CONDITION_FEATURE_SCHEMA = "target_point(2)+target_point_next(2)"
+ROUTE_CONDITION_FEATURE_DIM = 4
 
 
 class Bench2DriveDiffusionDataset(Dataset):
@@ -100,7 +102,7 @@ class Bench2DriveDiffusionDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict:
         cv2.setNumThreads(0)
-        route_dir, frame, command, speed, trajectory, speed_target = self._sample_components(index)
+        route_dir, frame, command, speed, trajectory, speed_target, route_condition = self._sample_components(index)
         hard_case = is_hard_left_turn_stop_sample_from_values(
             command,
             speed,
@@ -122,6 +124,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                 ),
                 "lidar_feature": build_lidar_feature(route_dir, frame, self.config),
                 "status_feature": build_status_feature_from_command(command, speed),
+                "route_condition_feature": route_condition,
             },
             "targets": {
                 "trajectory": trajectory,
@@ -138,7 +141,7 @@ class Bench2DriveDiffusionDataset(Dataset):
         }
 
     def get_sample_summary(self, index: int) -> dict:
-        route_dir, frame, command, speed, trajectory, speed_target = self._sample_components(index)
+        route_dir, frame, command, speed, trajectory, speed_target, route_condition = self._sample_components(index)
         hard_case = is_hard_left_turn_stop_sample_from_values(
             command,
             speed,
@@ -158,9 +161,10 @@ class Bench2DriveDiffusionDataset(Dataset):
             "target_speed_class": speed_target["target_speed_class"],
             "target_speed_label_valid": speed_target["target_speed_label_valid"],
             "brake": speed_target["brake"],
+            "route_condition_feature": route_condition,
         }
 
-    def _sample_components(self, index: int) -> tuple[Path, int, int, float, torch.Tensor, dict]:
+    def _sample_components(self, index: int) -> tuple[Path, int, int, float, torch.Tensor, dict, torch.Tensor]:
         route_dir, frame = self.samples[index]
         if self.sample_metadata is not None:
             metadata = self.sample_metadata[index]
@@ -168,7 +172,12 @@ class Bench2DriveDiffusionDataset(Dataset):
             speed = float(metadata["speed"])
             trajectory = torch.tensor(metadata["trajectory"], dtype=torch.float32)
             speed_target = target_speed_metadata_from_record(metadata, fallback_speed=speed)
-            return route_dir, frame, command, speed, trajectory, speed_target
+            route_condition_values = metadata.get("route_condition_feature")
+            if route_condition_values is None:
+                route_condition = build_route_condition_feature(load_annotation(route_dir, frame))
+            else:
+                route_condition = torch.tensor(route_condition_values, dtype=torch.float32)
+            return route_dir, frame, command, speed, trajectory, speed_target, route_condition
 
         annotation = load_annotation(route_dir, frame)
         trajectory = build_trajectory_target(
@@ -184,7 +193,8 @@ class Bench2DriveDiffusionDataset(Dataset):
         command = int(annotation.get("command_far", annotation.get("command_near", 4)))
         speed = float(annotation["speed"])
         speed_target = build_target_speed_metadata(annotation)
-        return route_dir, frame, command, speed, trajectory, speed_target
+        route_condition = build_route_condition_feature(annotation)
+        return route_dir, frame, command, speed, trajectory, speed_target, route_condition
 
     def _load_sample_manifest(self, manifest_path: Path) -> tuple[List[tuple[Path, int]], List[dict], dict[str, int]]:
         samples: List[tuple[Path, int]] = []
@@ -211,6 +221,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                     "target_speed_class": int(record.get("target_speed_class", -1)),
                     "target_speed_twohot": record.get("target_speed_twohot"),
                     "target_speed_label_valid": int(record.get("target_speed_label_valid", 0)),
+                    "route_condition_feature": record.get("route_condition_feature"),
                     "trajectory": record["trajectory"],
                 })
                 scenario = route_dir.parent.name
@@ -296,6 +307,7 @@ class Bench2DriveDiffusionDataset(Dataset):
             "spatial_target_interval": self.spatial_target_interval,
             "spatial_target_max_future_frames": self.spatial_target_max_future_frames,
             "target_speed_label": target_speed_label_metadata(),
+            "route_condition_feature": route_condition_feature_metadata(),
             "sample_count": len(self.samples),
         }
 
@@ -323,6 +335,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                     "trajectory": trajectory.tolist(),
                 }
                 record.update(build_target_speed_metadata(annotation))
+                record.update(build_route_condition_metadata(annotation))
                 file.write(json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n")
                 metadata_records.append({
                     "command": record["command"],
@@ -332,6 +345,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                     "target_speed_class": record["target_speed_class"],
                     "target_speed_twohot": record["target_speed_twohot"],
                     "target_speed_label_valid": record["target_speed_label_valid"],
+                    "route_condition_feature": record["route_condition_feature"],
                     "trajectory": record["trajectory"],
                 })
 
@@ -607,6 +621,55 @@ def target_speed_label_metadata() -> dict:
         "brake_class_index": 0,
         "valid_key": "target_speed_label_valid",
     }
+
+
+def route_condition_feature_metadata() -> dict:
+    return {
+        "schema": ROUTE_CONDITION_FEATURE_SCHEMA,
+        "dim": ROUTE_CONDITION_FEATURE_DIM,
+        "fields": ["target_point_x", "target_point_y", "target_point_next_x", "target_point_next_y"],
+    }
+
+
+def build_route_condition_metadata(annotation: dict) -> dict:
+    route_condition = build_route_condition_feature(annotation).tolist()
+    return {
+        "route_condition_feature": route_condition,
+        "target_point": route_condition[:2],
+        "target_point_next": route_condition[2:],
+    }
+
+
+def build_route_condition_feature(annotation: dict) -> torch.Tensor:
+    target_point = _route_point_from_annotation(annotation, "target_point", ("x_command_far", "y_command_far"))
+    target_point_next = _route_point_from_annotation(
+        annotation,
+        "target_point_next",
+        ("x_command_near", "y_command_near"),
+        fallback=target_point,
+    )
+    values = np.concatenate([target_point, target_point_next]).astype(np.float32)
+    return torch.from_numpy(values)
+
+
+def _route_point_from_annotation(
+    annotation: dict,
+    key: str,
+    command_keys: tuple[str, str],
+    fallback: np.ndarray | None = None,
+) -> np.ndarray:
+    if key in annotation:
+        point = np.asarray(annotation[key], dtype=np.float64)
+        if point.ndim > 0 and point.shape[0] >= 2:
+            return point[:2]
+
+    x_key, y_key = command_keys
+    if x_key in annotation and y_key in annotation:
+        return _world_xy_to_ego_xy(annotation, float(annotation[x_key]), float(annotation[y_key]))
+
+    if fallback is not None:
+        return np.asarray(fallback, dtype=np.float64)[:2]
+    return _command_direction(annotation)
 
 
 def build_target_speed_metadata(annotation: dict) -> dict:

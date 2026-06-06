@@ -23,10 +23,12 @@ from diffusiondrive.carla_native_dataset import (  # noqa: E402
     TARGET_MODE_FUTURE_EGO_TIME,
     TARGET_MODE_SPATIAL_PATH,
     Bench2DriveDiffusionDataset,
+    build_route_condition_metadata,
     build_target_speed_metadata,
     build_trajectory_target,
     is_hard_left_turn_stop_sample_from_values,
     load_annotation,
+    route_condition_feature_metadata,
     target_speed_label_metadata,
 )
 from b2d_quality_filter import QUALITY_FILTERS, QUALITY_FILTER_NONE, quality_filter_decision  # noqa: E402
@@ -93,6 +95,7 @@ def make_header(args: argparse.Namespace, sample_count: int, scenario_counts: di
         "spatial_target_interval": args.spatial_target_interval,
         "spatial_target_max_future_frames": args.spatial_target_max_future_frames,
         "target_speed_label": target_speed_label_metadata(),
+        "route_condition_feature": route_condition_feature_metadata(),
         "sample_count": sample_count,
         "scenario_counts": scenario_counts,
         "num_workers": args.num_workers,
@@ -193,6 +196,7 @@ def build_record(task: tuple[int, str, int, dict]) -> tuple[int, dict, bool]:
         "trajectory": trajectory.tolist(),
     }
     record.update(build_target_speed_metadata(annotation))
+    record.update(build_route_condition_metadata(annotation))
     return index, record, hard_case
 
 

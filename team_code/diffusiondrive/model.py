@@ -32,12 +32,18 @@ class V2TransfuserModel(nn.Module):
         self._config = config
         self._backbone = TransfuserBackbone(config)
 
-        self._keyval_embedding = nn.Embedding(8**2 + 1, config.tf_d_model)  # 8x8 feature grid + trajectory
+        keyval_tokens = config.lidar_vert_anchors * config.lidar_horz_anchors + config.condition_token_count
+        self._keyval_embedding = nn.Embedding(keyval_tokens, config.tf_d_model)
         self._query_embedding = nn.Embedding(sum(self._query_splits), config.tf_d_model)
 
         # usually, the BEV features are variable in size.
         self._bev_downscale = nn.Conv2d(512, config.tf_d_model, kernel_size=1)
         self._status_encoding = nn.Linear(config.status_dim, config.tf_d_model)
+        self._route_condition_encoding = (
+            nn.Linear(config.route_condition_dim, config.tf_d_model)
+            if config.route_condition_enabled
+            else None
+        )
         self._speed_head = (
             nn.Sequential(
                 nn.Linear(config.tf_d_model, config.tf_d_ffn),
@@ -117,10 +123,22 @@ class V2TransfuserModel(nn.Module):
         bev_feature = bev_feature.permute(0, 2, 1)
         status_encoding = self._status_encoding(status_feature)
 
-        keyval = torch.concatenate([bev_feature, status_encoding[:, None]], dim=1)
+        condition_tokens = [status_encoding]
+        if self._route_condition_encoding is not None:
+            route_condition_feature = features.get("route_condition_feature")
+            if route_condition_feature is None:
+                route_condition_feature = status_feature.new_zeros(batch_size, self._config.route_condition_dim)
+            route_condition_encoding = self._route_condition_encoding(route_condition_feature)
+            condition_tokens.append(route_condition_encoding)
+
+        keyval = torch.concatenate(
+            [bev_feature] + [condition_token[:, None] for condition_token in condition_tokens],
+            dim=1,
+        )
         keyval += self._keyval_embedding.weight[None, ...]
 
-        concat_cross_bev = keyval[:,:-1].permute(0,2,1).contiguous().view(batch_size, -1, concat_cross_bev_shape[0], concat_cross_bev_shape[1])
+        condition_token_count = len(condition_tokens)
+        concat_cross_bev = keyval[:, :-condition_token_count].permute(0,2,1).contiguous().view(batch_size, -1, concat_cross_bev_shape[0], concat_cross_bev_shape[1])
         # upsample to the same shape as bev_feature_upscale
 
         concat_cross_bev = F.interpolate(concat_cross_bev, size=bev_spatial_shape, mode='bilinear', align_corners=False)

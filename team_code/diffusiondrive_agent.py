@@ -11,6 +11,7 @@ Env vars:
   - DIFFUSIONDRIVE_LIDAR_POS / DIFFUSIONDRIVE_LIDAR_ROT: override online LiDAR pose, "x,y,z".
   - DIFFUSIONDRIVE_CROP_IMAGE: override image crop flag (0/1).
   - DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT / DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH: override model input size.
+  - DIFFUSIONDRIVE_USE_ROUTE_CONDITION: feed target_point/target_point_next route token (default: 1).
   - DIFFUSIONDRIVE_ZERO_LIDAR: replace LiDAR BEV with zeros for diagnostic ablation (default: 0).
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
@@ -131,6 +132,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("Use JPEG artifact in DiffusionDrive image preprocessing:", self.apply_jpeg_artifact)
         print("DiffusionDrive image normalization:", self.image_normalization)
         self.zero_lidar = strtobool(os.environ.get("DIFFUSIONDRIVE_ZERO_LIDAR", "0"))
+        self.use_route_condition = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_ROUTE_CONDITION", "1"))
         self.use_command_delay = strtobool(os.environ.get("DIFFUSIONDRIVE_COMMAND_DELAY", "0"))
         self.use_spatial_pid = strtobool(os.environ.get(
             "DIFFUSIONDRIVE_SPATIAL_PID",
@@ -182,6 +184,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive route debug:", self.debug_route)
         print("DiffusionDrive safety-box debug:", self.debug_safety_box)
         print("DiffusionDrive zero LiDAR:", self.zero_lidar)
+        print("DiffusionDrive route condition token:", self.use_route_condition)
 
         # DiffusionDrive model config
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
@@ -579,10 +582,9 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         ego_target_point = torch.from_numpy(ego_target_point[np.newaxis]).to(self.device, dtype=torch.float32)
         result['target_point'] = ego_target_point
 
-        if self.config.two_tp_input:
-            ego_target_point_next = t_u.inverse_conversion_2d(target_point_next[:2], result['gps'], result['compass'])
-            ego_target_point_next = torch.from_numpy(ego_target_point_next[np.newaxis]).to(self.device, dtype=torch.float32)
-            result['target_point_next'] = ego_target_point_next
+        ego_target_point_next = t_u.inverse_conversion_2d(target_point_next[:2], result['gps'], result['compass'])
+        ego_target_point_next = torch.from_numpy(ego_target_point_next[np.newaxis]).to(self.device, dtype=torch.float32)
+        result['target_point_next'] = ego_target_point_next
 
         result['speed'] = torch.FloatTensor([speed]).to(self.device, dtype=torch.float32)
 
@@ -611,6 +613,11 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
     def _build_status(self, tick_data):
         return build_status_feature(tick_data['command'], tick_data['speed'], device=self.device)
+
+    def _build_route_condition(self, tick_data):
+        target_point = tick_data['target_point']
+        target_point_next = tick_data.get('target_point_next', target_point)
+        return torch.cat([target_point, target_point_next], dim=1).to(self.device, dtype=torch.float32)
 
     def _control_pid(self, waypoints, speed, route_points_ego=None):
         waypoints = waypoints[0].detach().cpu().numpy()
@@ -971,11 +978,14 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         status = self._build_status(tick_data)
 
-        outputs = self.model({
+        features = {
             'camera_feature': rgb,
             'lidar_feature': lidar_bev,
             'status_feature': status,
-        })
+        }
+        if self.use_route_condition:
+            features['route_condition_feature'] = self._build_route_condition(tick_data)
+        outputs = self.model(features)
 
         traj = outputs['trajectory']
         if traj.shape[-1] != 2:

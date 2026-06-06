@@ -103,6 +103,11 @@ def validate_diffusiondrive_config(config: DiffusionDriveConfig) -> None:
         raise RuntimeError(
             f"DiffusionDrive status_dim mismatch: got {config.status_dim}, expected {expected_status_dim}."
         )
+    if config.route_condition_enabled and config.route_condition_dim != 4:
+        raise RuntimeError(
+            "DiffusionDrive route_condition_dim must be 4 when route condition is enabled; "
+            f"got {config.route_condition_dim}."
+        )
 
     if config.camera_height % 32 != 0 or config.camera_width % 32 != 0:
         raise RuntimeError(

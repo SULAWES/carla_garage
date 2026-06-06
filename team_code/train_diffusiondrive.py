@@ -22,6 +22,7 @@ from config import GlobalConfig
 from diffusiondrive.carla_native_dataset import (
     Bench2DriveDiffusionDataset,
     TARGET_SPEED_CLASSES_MPS,
+    route_condition_feature_metadata,
     target_speed_label_metadata,
 )
 from diffusiondrive.config_adapter import (
@@ -367,6 +368,12 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "schema": STATUS_FEATURE_SCHEMA,
             "dim": dd_config.status_dim,
             "normalized": False,
+        },
+        "route_condition_token": {
+            "enabled": dd_config.route_condition_enabled,
+            "dim": dd_config.route_condition_dim,
+            "schema": route_condition_feature_metadata(),
+            "source": "target_point and target_point_next from B2D measurements / manifest",
         },
         "speed_head": {
             "enabled": dd_config.speed_head_enabled,

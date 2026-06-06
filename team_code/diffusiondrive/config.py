@@ -75,6 +75,10 @@ class DiffusionDriveConfig:
     command_dim: int = 6
     speed_dim: int = 1
 
+    # Route condition token dims: target_point(2) + target_point_next(2)
+    route_condition_enabled: bool = True
+    route_condition_dim: int = 4
+
     tf_d_model: int = 256
     tf_d_ffn: int = 1024
     tf_num_layers: int = 3
@@ -143,6 +147,10 @@ class DiffusionDriveConfig:
     @property
     def status_dim(self) -> int:
         return self.command_dim + self.speed_dim
+
+    @property
+    def condition_token_count(self) -> int:
+        return 1 + int(self.route_condition_enabled)
 
     @property
     def bev_semantic_frame(self) -> Tuple[int, int]:
