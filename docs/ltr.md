@@ -42,3 +42,13 @@ command时序差异出自对garage sensor_agent的继承
 num_workers大一点。
 
 实验发现，7 CPU物理核心的时候num-workers设置为16有效（
+
+haonimaduobishi
+caonima
+
+传感器
+1024*512 1024*384 1024*256
+LiDAR
+SpeedHead
+额外的两个condition token
+ResNet34 vs ResNet50

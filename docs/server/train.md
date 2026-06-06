@@ -905,3 +905,30 @@ export PER_GPU_BATCH=16
 但更接近原版 DDP 训练习惯的是每卡 64。
 
 
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_spatial.jsonl
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir /share/home/u19666033/djy/carla_dataset \
+    --route-glob "*/*" \
+    --output-manifest ${TRAIN_MANIFEST} \
+    --frame-sampling 5 \
+    --target-mode spatial_path \
+    --balanced-scenarios \
+    --quality-filter soft_clean \
+    --num-workers 16 \
+    --rebuild \
+    --verify-load
+
+如果之后想做 syb-clean 对照，只改两处：
+
+TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_condition_v1_train_syb_clean_fs5_spatial.jsonl
+
+
+并把参数改成：
+--quality-filter syb_clean
