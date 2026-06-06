@@ -34,7 +34,7 @@
 - distributed：`--distributed auto|none|ddp`，默认 `auto`，用 `torchrun` 启动且 `WORLD_SIZE>1` 时自动启用 DDP
 - hard-case weighting：`--hard-left-turn-stop-loss-weight`、`--hard-left-turn-command`、`--hard-left-turn-speed-threshold`、`--hard-left-turn-y-threshold`
 - sample distribution stats：`--dataset-stats-max-samples` 会落盘 `train_sample_distribution.json` / `validation_sample_distribution.json` / `eval_sample_distribution.json`
-- dataloader / manifest：`--sample-manifest`、`--val-sample-manifest`、`--rebuild-sample-manifest`、`--prefetch-factor`、`--persistent-workers`
+- dataloader / manifest：`--sample-manifest`、`--val-sample-manifest`、`--rebuild-sample-manifest`、`--prefetch-factor`、`--persistent-workers`；CPU-only manifest builder 支持 `--quality-filter none|soft_clean|syb_clean`
 - preprocessing：`--model-image-height`、`--model-image-width`、`--no-jpeg-artifact`
 - evaluation：`--eval-only` 会只加载模型并跑评估，不进入训练循环；训练 checkpoint 用 `--resume-file` 严格加载 `model`，普通权重 / NAVSIM checkpoint 可用 `--load-file` 部分加载
 
@@ -397,6 +397,16 @@ python tools/build_diffusiondrive_manifest.py \
   --rebuild \
   --verify-load
 ```
+
+manifest builder 可选 route-level quality filter：
+
+```bash
+--quality-filter none       # 默认，保留所有可构造样本的 route
+--quality-filter soft_clean # 去掉 missing results / FAILED_ / hard failed status route
+--quality-filter syb_clean  # soft_clean 基础上，只保留 score=100 或仅 min-speed infractions 的 route
+```
+
+`soft_clean` 在当前 B2D Full 统计中几乎等价于 full，只去掉少量 `missing_results`，适合作为下一轮 `baseline-condition-v1` 主线。`syb_clean` 会明显削减 brake / class-0 / hard interaction 场景样本，建议先作为 ablation，而不是默认主线。filter 写入 manifest header 的 `quality_filter` 字段；训练时仍通过 `--sample-manifest` 读取该 JSONL。
 
 验证集 manifest 单独构建：
 

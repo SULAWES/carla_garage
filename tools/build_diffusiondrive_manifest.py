@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Iterable
@@ -28,6 +29,7 @@ from diffusiondrive.carla_native_dataset import (  # noqa: E402
     load_annotation,
     target_speed_label_metadata,
 )
+from b2d_quality_filter import QUALITY_FILTERS, QUALITY_FILTER_NONE, quality_filter_decision  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +41,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--balanced-scenarios", action="store_true")
     parser.add_argument("--max-samples-per-scenario", type=int, default=None)
+    parser.add_argument(
+        "--quality-filter",
+        choices=QUALITY_FILTERS,
+        default=QUALITY_FILTER_NONE,
+        help=(
+            "Route-level quality filter before writing samples. "
+            "soft_clean drops missing results / hard failed routes; "
+            "syb_clean additionally keeps only score=100 routes or min-speed-only infractions."
+        ),
+    )
     parser.add_argument(
         "--target-mode",
         choices=(TARGET_MODE_SPATIAL_PATH, TARGET_MODE_FUTURE_EGO_TIME),
@@ -71,6 +83,7 @@ def make_header(args: argparse.Namespace, sample_count: int, scenario_counts: di
         "max_samples": args.max_samples,
         "balanced_scenarios": args.balanced_scenarios,
         "max_samples_per_scenario": args.max_samples_per_scenario,
+        "quality_filter": args.quality_filter,
         "target_mode": args.target_mode,
         "num_poses": args.num_poses,
         "future_stride": args.future_stride,
@@ -86,7 +99,7 @@ def make_header(args: argparse.Namespace, sample_count: int, scenario_counts: di
 
 
 def discover_samples(args: argparse.Namespace) -> Bench2DriveDiffusionDataset:
-    return Bench2DriveDiffusionDataset(
+    dataset = Bench2DriveDiffusionDataset(
         args.root_dir,
         config=GlobalConfig(),
         num_poses=args.num_poses,
@@ -101,6 +114,46 @@ def discover_samples(args: argparse.Namespace) -> Bench2DriveDiffusionDataset:
         balanced_scenarios=args.balanced_scenarios,
         max_samples_per_scenario=args.max_samples_per_scenario,
     )
+    if args.quality_filter != QUALITY_FILTER_NONE:
+        apply_quality_filter(dataset, args.quality_filter)
+    return dataset
+
+
+def apply_quality_filter(dataset: Bench2DriveDiffusionDataset, quality_filter: str) -> None:
+    route_decisions = {}
+    reason_counts: Counter[str] = Counter()
+    kept_samples = []
+
+    for route_dir, frame in dataset.samples:
+        route_key = route_dir.resolve()
+        decision = route_decisions.get(route_key)
+        if decision is None:
+            decision = quality_filter_decision(route_dir, quality_filter)
+            route_decisions[route_key] = decision
+            if not decision.keep:
+                reason_counts[decision.reason] += 1
+        if decision.keep:
+            kept_samples.append((route_dir, frame))
+
+    before_samples = len(dataset.samples)
+    before_routes = len(route_decisions)
+    kept_routes = sum(1 for decision in route_decisions.values() if decision.keep)
+    dataset.samples = kept_samples
+    dataset.scenario_sample_counts = recount_scenarios(kept_samples)
+
+    print(
+        f"Quality filter {quality_filter}: routes={kept_routes}/{before_routes} "
+        f"samples={len(kept_samples)}/{before_samples} skipped={dict(reason_counts)}",
+        flush=True,
+    )
+
+
+def recount_scenarios(samples: list[tuple[Path, int]]) -> dict[str, int]:
+    scenario_counts: dict[str, int] = {}
+    for route_dir, _frame in samples:
+        scenario = route_dir.parent.name
+        scenario_counts[scenario] = scenario_counts.get(scenario, 0) + 1
+    return scenario_counts
 
 
 def build_record(task: tuple[int, str, int, dict]) -> tuple[int, dict, bool]:

@@ -16,12 +16,15 @@ from typing import Iterable
 TARGET_MODE_SPATIAL_PATH = "spatial_path"
 TARGET_MODE_FUTURE_EGO_TIME = "future_ego_time"
 TARGET_SPEED_CLASSES_MPS = (0.0, 4.0, 8.0, 10.0, 13.88888888, 16.0, 17.77777777, 20.0)
-FAILED_STATUSES = {
-    "Failed",
-    "Failed - Agent couldn't be set up",
-    "Failed - Simulation crashed",
-    "Failed - Agent crashed",
-}
+
+from b2d_quality_filter import (  # noqa: E402
+    load_result,
+    result_min_speed_infractions,
+    result_num_infractions,
+    result_score,
+    soft_clean_decision,
+    syb_clean_decision,
+)
 
 
 @dataclass
@@ -384,18 +387,6 @@ def write_scenario_csv(path: Path, per_scenario: dict[str, dict]) -> None:
             writer.writerow({key: row.get(key) for key in fieldnames})
 
 
-def load_result(route_dir: Path) -> dict | None:
-    for path in (route_dir / "results.json.gz", route_dir / "results.json"):
-        if not path.is_file():
-            continue
-        if path.suffix == ".gz":
-            with gzip.open(path, "rt", encoding="utf-8") as file:
-                return json.load(file)
-        with path.open("r", encoding="utf-8") as file:
-            return json.load(file)
-    return None
-
-
 def load_annotation(route_dir: Path, frame: int) -> dict:
     path = frame_path(annotation_dir(route_dir), frame, ".json.gz")
     with gzip.open(path, "rt", encoding="utf-8") as file:
@@ -407,40 +398,6 @@ def load_annotation(route_dir: Path, frame: int) -> dict:
         annotation.setdefault("command_far", int(annotation.get("command", annotation.get("next_command", 4))))
         annotation.setdefault("command_near", int(annotation.get("next_command", annotation["command_far"])))
     return annotation
-
-
-def result_score(result: dict | None) -> float | None:
-    if not result:
-        return None
-    try:
-        return float(result.get("scores", {}).get("score_composed"))
-    except (TypeError, ValueError):
-        return None
-
-
-def result_num_infractions(result: dict | None) -> int | None:
-    if not result:
-        return None
-    value = result.get("num_infractions")
-    if value is not None:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-    infractions = result.get("infractions", {})
-    if isinstance(infractions, dict):
-        return sum(len(value) for value in infractions.values() if isinstance(value, list))
-    return None
-
-
-def result_min_speed_infractions(result: dict | None) -> int:
-    if not result:
-        return 0
-    infractions = result.get("infractions", {})
-    if not isinstance(infractions, dict):
-        return 0
-    min_speed = infractions.get("min_speed_infractions", [])
-    return len(min_speed) if isinstance(min_speed, list) else 0
 
 
 def target_speed_class(target_speed: float, brake: bool) -> int:
