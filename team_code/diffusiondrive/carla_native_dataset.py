@@ -36,8 +36,9 @@ class Bench2DriveDiffusionDataset(Dataset):
         frame_sampling: int = 1,
         max_samples: Optional[int] = None,
         route_glob: str = "*",
-        model_image_size: tuple[int, int] = (256, 1024),
+        model_image_size: tuple[int, int] = (384, 1024),
         jpeg_artifact: bool = True,
+        image_normalization: str = "none",
         target_mode: str = TARGET_MODE_SPATIAL_PATH,
         spatial_target_first_distance: float = 2.5,
         spatial_target_interval: float = 1.0,
@@ -50,6 +51,7 @@ class Bench2DriveDiffusionDataset(Dataset):
         hard_left_turn_y_threshold: float = 4.0,
         sample_manifest_path: Optional[str | Path] = None,
         rebuild_sample_manifest: bool = False,
+        skip_first_frames: int = 0,
     ) -> None:
         self.root_dirs = [Path(root) for root in root_dirs]
         self.config = config
@@ -60,6 +62,12 @@ class Bench2DriveDiffusionDataset(Dataset):
         self.route_glob = route_glob
         self.model_image_size = model_image_size
         self.jpeg_artifact = jpeg_artifact
+        if image_normalization not in {"none", "imagenet"}:
+            raise RuntimeError(
+                "image_normalization must be one of: none, imagenet; "
+                f"got {image_normalization!r}."
+            )
+        self.image_normalization = image_normalization
         self.target_mode = target_mode
         self.spatial_target_first_distance = spatial_target_first_distance
         self.spatial_target_interval = spatial_target_interval
@@ -72,6 +80,7 @@ class Bench2DriveDiffusionDataset(Dataset):
         self.hard_left_turn_y_threshold = hard_left_turn_y_threshold
         self.sample_metadata: Optional[List[dict]] = None
         self.sample_manifest_path = Path(sample_manifest_path) if sample_manifest_path else None
+        self.skip_first_frames = max(0, int(skip_first_frames))
 
         if self.sample_manifest_path and self.sample_manifest_path.is_file() and not rebuild_sample_manifest:
             self.samples, self.sample_metadata, self.scenario_sample_counts = self._load_sample_manifest(
@@ -109,6 +118,7 @@ class Bench2DriveDiffusionDataset(Dataset):
                     self.config,
                     model_image_size=self.model_image_size,
                     jpeg_artifact=self.jpeg_artifact,
+                    image_normalization=self.image_normalization,
                 ),
                 "lidar_feature": build_lidar_feature(route_dir, frame, self.config),
                 "status_feature": build_status_feature_from_command(command, speed),
@@ -231,6 +241,7 @@ class Bench2DriveDiffusionDataset(Dataset):
             "spatial_target_interval": self.spatial_target_interval,
             "spatial_target_max_future_frames": self.spatial_target_max_future_frames,
             "frame_sampling": self.frame_sampling,
+            "skip_first_frames": self.skip_first_frames,
             "max_samples": self.max_samples,
             "balanced_scenarios": self.balanced_scenarios,
             "max_samples_per_scenario": self.max_samples_per_scenario,
@@ -274,6 +285,7 @@ class Bench2DriveDiffusionDataset(Dataset):
             "root_dir": [str(root) for root in self.root_dirs],
             "route_glob": self.route_glob,
             "frame_sampling": self.frame_sampling,
+            "skip_first_frames": self.skip_first_frames,
             "max_samples": self.max_samples,
             "balanced_scenarios": self.balanced_scenarios,
             "max_samples_per_scenario": self.max_samples_per_scenario,
@@ -344,7 +356,11 @@ class Bench2DriveDiffusionDataset(Dataset):
             for route_dir in sorted(root_path.glob(route_glob)):
                 if not _is_b2d_route(route_dir):
                     continue
-                frames = sorted(int(path.stem.split(".")[0]) for path in _annotation_dir(route_dir).glob("*.json.gz"))
+                frames = sorted(
+                    frame
+                    for frame in (int(path.stem.split(".")[0]) for path in _annotation_dir(route_dir).glob("*.json.gz"))
+                    if frame >= self.skip_first_frames
+                )
                 for frame in frames[:: self.frame_sampling]:
                     if self._has_required_files(route_dir, frame):
                         samples.append((route_dir, frame))
@@ -372,7 +388,11 @@ class Bench2DriveDiffusionDataset(Dataset):
                 bucket = scenario_buckets.setdefault(scenario, [])
                 if self.max_samples_per_scenario is not None and len(bucket) >= self.max_samples_per_scenario:
                     continue
-                frames = sorted(int(path.stem.split(".")[0]) for path in _annotation_dir(route_dir).glob("*.json.gz"))
+                frames = sorted(
+                    frame
+                    for frame in (int(path.stem.split(".")[0]) for path in _annotation_dir(route_dir).glob("*.json.gz"))
+                    if frame >= self.skip_first_frames
+                )
                 for frame in frames[:: self.frame_sampling]:
                     if self._has_required_files(route_dir, frame):
                         bucket.append((route_dir, frame))
@@ -497,16 +517,18 @@ def build_camera_feature(
     route_dir: Path,
     frame: int,
     config: GlobalConfig,
-    model_image_size: tuple[int, int] = (256, 1024),
+    model_image_size: tuple[int, int] = (384, 1024),
     jpeg_artifact: bool = True,
+    image_normalization: str = "none",
 ) -> torch.Tensor:
     image_path = _frame_path(_image_dir(route_dir), frame, ".jpg")
     camera_bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if camera_bgr is None:
         raise RuntimeError(f"Failed to read image: {image_path}")
 
-    # Raw B2D images are commonly 900x1600. For the CARLA-native baseline,
-    # map them into the online sensor size before applying the online crop.
+    # Current B2D Full images are 512x1024 in the remote dataset. Keep this
+    # resize so older raw exports are mapped into the online sensor size before
+    # applying the online crop.
     camera_bgr = cv2.resize(camera_bgr, (config.camera_width, config.camera_height), interpolation=cv2.INTER_LINEAR)
     if jpeg_artifact:
         _, encoded = cv2.imencode(".jpg", camera_bgr)
@@ -521,6 +543,15 @@ def build_camera_feature(
         mode="bilinear",
         align_corners=False,
     )
+    if image_normalization == "imagenet":
+        mean = torch.tensor([0.485, 0.456, 0.406], dtype=camera_tensor.dtype).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], dtype=camera_tensor.dtype).view(1, 3, 1, 1)
+        camera_tensor = (camera_tensor - mean) / std
+    elif image_normalization != "none":
+        raise RuntimeError(
+            "image_normalization must be one of: none, imagenet; "
+            f"got {image_normalization!r}."
+        )
     return camera_tensor.squeeze(0)
 
 

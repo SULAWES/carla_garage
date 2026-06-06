@@ -43,7 +43,7 @@ class DiffusionDriveConfig:
     lidar_seq_len: int = 1
 
     camera_width: int = 1024
-    camera_height: int = 256
+    camera_height: int = 384
     lidar_resolution_width: int = 256
     lidar_resolution_height: int = 256
 

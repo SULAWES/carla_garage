@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persistent-workers", action="store_true")
     parser.add_argument("--frame-sampling", type=int, default=5)
     parser.add_argument("--val-frame-sampling", type=int, default=None)
+    parser.add_argument("--skip-first-frames", type=int, default=0)
     parser.add_argument("--future-stride", type=int, default=10)
     parser.add_argument("--dataset-mode", default="b2d_full_raw")
     parser.add_argument("--target-mode", choices=("spatial_path", "future_ego_time"), default="spatial_path")
@@ -64,8 +65,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spatial-target-interval", type=float, default=1.0)
     parser.add_argument("--spatial-target-max-future-frames", type=int, default=120)
     parser.add_argument("--assumed-frame-interval", type=float, default=0.1)
-    parser.add_argument("--b2d-source-image-height", type=int, default=900)
-    parser.add_argument("--b2d-source-image-width", type=int, default=1600)
+    parser.add_argument("--b2d-source-image-height", type=int, default=512)
+    parser.add_argument("--b2d-source-image-width", type=int, default=1024)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--val-max-samples", type=int, default=None)
     parser.add_argument("--balanced-scenarios", action="store_true")
@@ -92,8 +93,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--distributed", choices=("auto", "none", "ddp"), default="auto")
     parser.add_argument("--drop-last", action="store_true")
     parser.add_argument("--no-jpeg-artifact", action="store_true")
-    parser.add_argument("--model-image-height", type=int, default=256)
+    parser.add_argument("--model-image-height", type=int, default=384)
     parser.add_argument("--model-image-width", type=int, default=1024)
+    parser.add_argument("--image-normalization", choices=("none", "imagenet"), default="none")
     parser.add_argument("--trajectory-weight", type=float, default=None)
     parser.add_argument("--trajectory-cls-weight", type=float, default=None)
     parser.add_argument("--trajectory-reg-weight", type=float, default=None)
@@ -260,6 +262,7 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "val_route_glob": args.val_route_glob or args.route_glob,
             "frame_sampling": args.frame_sampling,
             "val_frame_sampling": args.val_frame_sampling or args.frame_sampling,
+            "skip_first_frames": args.skip_first_frames,
             "future_stride": args.future_stride,
             "target_mode": args.target_mode,
             "max_samples": args.max_samples,
@@ -352,8 +355,9 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
             "crop_image": global_config.crop_image,
             "cropped_size": [global_config.cropped_height, global_config.cropped_width],
             "model_image_size": [args.model_image_height, args.model_image_width],
-            "input_range": "[0,1]",
-            "imagenet_normalization": False,
+            "input_range": "[0,1] before optional normalization",
+            "image_normalization": args.image_normalization,
+            "imagenet_normalization": args.image_normalization == "imagenet",
             "jpeg_artifact": not args.no_jpeg_artifact,
         },
         "status_feature": {
@@ -634,6 +638,7 @@ def build_dataset(
         route_glob=route_glob,
         model_image_size=(dd_config.camera_height, dd_config.camera_width),
         jpeg_artifact=not args.no_jpeg_artifact,
+        image_normalization=args.image_normalization,
         target_mode=args.target_mode,
         spatial_target_first_distance=args.spatial_target_first_distance,
         spatial_target_interval=args.spatial_target_interval,
@@ -648,6 +653,7 @@ def build_dataset(
         hard_left_turn_y_threshold=args.hard_left_turn_y_threshold,
         sample_manifest_path=sample_manifest_path,
         rebuild_sample_manifest=args.rebuild_sample_manifest,
+        skip_first_frames=args.skip_first_frames,
     )
 
 

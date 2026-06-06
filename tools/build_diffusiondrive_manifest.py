@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--route-glob", default="*")
     parser.add_argument("--output-manifest", type=Path, required=True)
     parser.add_argument("--frame-sampling", type=int, default=5)
+    parser.add_argument("--skip-first-frames", type=int, default=0)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--balanced-scenarios", action="store_true")
     parser.add_argument("--max-samples-per-scenario", type=int, default=None)
@@ -80,6 +81,7 @@ def make_header(args: argparse.Namespace, sample_count: int, scenario_counts: di
         "root_dir": [str(path) for path in args.root_dir],
         "route_glob": args.route_glob,
         "frame_sampling": args.frame_sampling,
+        "skip_first_frames": args.skip_first_frames,
         "max_samples": args.max_samples,
         "balanced_scenarios": args.balanced_scenarios,
         "max_samples_per_scenario": args.max_samples_per_scenario,
@@ -105,6 +107,7 @@ def discover_samples(args: argparse.Namespace) -> Bench2DriveDiffusionDataset:
         num_poses=args.num_poses,
         future_stride=args.future_stride,
         frame_sampling=args.frame_sampling,
+        skip_first_frames=args.skip_first_frames,
         max_samples=args.max_samples,
         route_glob=args.route_glob,
         target_mode=args.target_mode,
@@ -283,6 +286,7 @@ def main() -> None:
             num_poses=args.num_poses,
             future_stride=args.future_stride,
             frame_sampling=args.frame_sampling,
+            skip_first_frames=args.skip_first_frames,
             max_samples=args.max_samples,
             route_glob=args.route_glob,
             target_mode=args.target_mode,
