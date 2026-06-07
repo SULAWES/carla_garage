@@ -978,3 +978,86 @@ python tools/build_diffusiondrive_manifest.py \
     --rebuild \
     --verify-load
 
+4 卡 Full Retrain
+
+srun -p L40 -J dd_condv1_4gpu -N 1 -n 1 \
+    --gres=gpu:l40:4 \
+    --cpus-per-task=28 \
+    --mem=256G \
+    --pty /bin/bash
+
+进入作业后：
+
+cd ~/ltr/carla_garage
+conda activate ltr_garage_2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+export DATA_ROOT=/share/home/u19666033/djy/carla_dataset
+export TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25_spatial.jsonl
+export VAL_MANIFEST=/share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25.jsonl
+
+export LOGDIR=/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1
+export RUN_ID=soft_clean_skip25_imgnet_ddp4_bs64x4_lr6e-4_ep100
+mkdir -p ${LOGDIR}
+
+export NPROC_PER_NODE=4
+export PER_GPU_BATCH=64
+export GLOBAL_BATCH=$((NPROC_PER_NODE * PER_GPU_BATCH))
+export SAMPLES=$(python -c 'import json, os; p=os.environ["TRAIN_MANIFEST"]; print(sum(1 for l in open(p) if l.strip() and
+json.loads(l).get("type") != "metadata"))')
+export STEPS_PER_EPOCH=$(( (SAMPLES + GLOBAL_BATCH - 1) / GLOBAL_BATCH ))
+export WARMUP_STEPS=$(( STEPS_PER_EPOCH * 3 ))
+
+echo samples=${SAMPLES}
+echo global_batch=${GLOBAL_BATCH}
+echo steps_per_epoch=${STEPS_PER_EPOCH}
+echo warmup_steps=${WARMUP_STEPS}
+
+torchrun --standalone --nproc_per_node=${NPROC_PER_NODE} \
+team_code/train_diffusiondrive.py \
+    --distributed ddp \
+    --root-dir ${DATA_ROOT} \
+    --route-glob "*/*" \
+    --val-root-dir ${DATA_ROOT}/NonSignalizedJunctionLeftTurn \
+    --val-route-glob "*" \
+    --logdir ${LOGDIR} \
+    --id ${RUN_ID} \
+    --epochs 100 \
+    --batch-size ${PER_GPU_BATCH} \
+    --frame-sampling 5 \
+    --skip-first-frames 25 \
+    --balanced-scenarios \
+    --num-workers 5 \
+    --prefetch-factor 2 \
+    --persistent-workers \
+    --scheduler cosine \
+    --warmup-steps ${WARMUP_STEPS} \
+    --min-lr 1e-6 \
+    --val-every-steps ${STEPS_PER_EPOCH} \
+    --val-frame-sampling 5 \
+    --val-skip-first-frames 25 \
+    --val-max-samples 1024 \
+    --max-val-steps 64 \
+    --save-every-steps ${STEPS_PER_EPOCH} \
+    --log-every 50 \
+    --lr 6e-4 \
+    --weight-decay 1e-4 \
+    --image-encoder-lr-mult 0.5 \
+    --grad-clip-norm 0 \
+    --model-image-height 384 \
+    --model-image-width 1024 \
+    --image-normalization imagenet \
+    --anchor-path /share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+    --backbone-path /share/home/u19666033/ltr/pytorch_model.bin \
+    --load-file "" \
+    --hard-left-turn-stop-loss-weight 1.0 \
+    --dataset-stats-max-samples 4096 \
+    --sample-manifest ${TRAIN_MANIFEST} \
+    --val-sample-manifest ${VAL_MANIFEST} \
+    2>&1 | tee ${LOGDIR}/${RUN_ID}_train.log
+
