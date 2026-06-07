@@ -8,6 +8,7 @@
 - 当前 full baseline-basic open-loop 很强：all-scenarios `l1_mean=0.0192`；但 Bench2Drive 220 closed-loop 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`。
 - 这说明主要问题已经从训练链路转向闭环执行：空间 checkpoint 到控制的速度语义 gap、低速/creep/safety-box、route deviation、collisions，以及部分 sensor contract gap。
 - `S1/S2` camera / crop 诊断表现明显差于 A8/A9/A12，说明当前不宜把主线继续押在 B2D-like 在线 camera geometry 上。sensor-aligned full retrain 暂时降级为归档/诊断方向。
+- `Z0/Z1` zero-LiDAR 20-route 诊断反而优于对应非 zero-LiDAR 对照，说明当前模型侧 LiDAR BEV 分支可能是负贡献；这个结论只针对模型输入的 LiDAR BEV，不代表 safety-box raw LiDAR 应关闭。
 - 完全重训成本可接受，且 220-route 闭环比重训更慢；因此后续应减少纯推理侧小实验，把工作集中到少数结构性改动和 full retrain 上。
 
 ## 实验原则
@@ -456,6 +457,36 @@ aim_point = (1 - blend_weight) * model_aim_point + blend_weight * route_aim_poin
 
 以前搁置的 v3-v9 LiDAR BEV 对齐工作，主要研究的是多帧历史 LiDAR BEV 的 residual alignment / refinement。当前 baseline 主线实际并没有使用这套 refinement。
 
+### 原版 NAVSIM 与 syb 的 LiDAR 差异
+
+原版 NAVSIM DiffusionDrive 的 LiDAR 路线不是点云网络，而是：
+
+```text
+latest lidar point cloud
+-> x/y BEV histogram over [-32m, 32m] with 4 px/m
+-> 256x256 single-frame BEV feature
+-> lidar CNN encoder
+-> TransFuser multi-scale camera/lidar fusion
+```
+
+原版默认 backbone 是：
+
+```text
+image_architecture = resnet34
+lidar_architecture = resnet34
+```
+
+syb / garage 旧模型常用：
+
+```text
+image_architecture = regnety_032
+lidar_architecture = regnety_032
+```
+
+`regnety_032` 是 `timm` 中的 2D CNN backbone 名称，不是 LiDAR 专用模块。它处理的是已经栅格化后的 BEV histogram，因此“换成 regnety_032”本质上是换 LiDAR/image encoder 结构，需要 full retrain，不能直接复用当前 ResNet34 checkpoint。
+
+当前 CARLA DiffusionDrive 主线实际更接近原版 NAVSIM：`DiffusionDriveConfig.lidar_architecture = resnet34`，`config_adapter.py` 只同步 LiDAR 几何 / BEV 参数，没有把 `GlobalConfig.lidar_architecture=regnety_032` 带入 DiffusionDrive config。因此当前 zero-LiDAR 结果不能解释为“regnety_032 不好”，只能解释为“当前 ResNet34 BEV LiDAR 分支在闭环中可能不可靠”。
+
 ### 当前实际使用路径
 
 训练侧：
@@ -479,7 +510,10 @@ current half scan + aligned previous half scan -> full scan -> lidar_to_histogra
 ### 对当前 baseline 的影响判断
 
 - 旧的多帧 LiDAR BEV residual refinement 没完成，不应被视作当前 baseline 结果差的主要原因。
-- 但 LiDAR 坐标和近场点云仍可能影响闭环，尤其是 creep 时的 safety box。
+- 但 LiDAR 有两条不同作用路径，必须分开判断：
+  - 模型侧：`lidar_feature` 进入 DiffusionDrive backbone，与 camera feature 融合。
+  - runtime 侧：raw LiDAR / buffer 进入 safety-box、stuck / creep 等规则逻辑。
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只把模型侧 `lidar_feature` 置零，不关闭 safety-box raw LiDAR。因此 zero-LiDAR 结果更好时，说明问题优先集中在模型侧 BEV LiDAR 分支，而不是 safety-box 必然应该移除。
 - 目前大量 `Creeping stopped by safety box` 说明 safety-box runtime 行为值得单独诊断。
 
 当前真正需要关注的是：
@@ -490,6 +524,24 @@ online LiDAR:  x=0.0,   z=2.5,  yaw=-90
 ```
 
 以及 online safety box 是否因为近场点云 / 坐标 / 阈值问题误触发。
+
+### 当前 zero-LiDAR 20-route 诊断
+
+本地已下载的 20-route sensor ablation 中，zero-LiDAR 结果是明显正向信号：
+
+```text
+Z0_zero_lidar_safety_debug:
+  DS=46.72, RC=78.74, infraction_penalty=0.575
+  blocked_status=3, deviated_status=8, timeout_status=0
+  stuck_logs=72, safety_box_stop_logs=9733
+
+Z1_A9_pid_7_3_zero_lidar_safety_debug:
+  DS=53.64, RC=81.00, infraction_penalty=0.605
+  blocked_status=3, deviated_status=6, timeout_status=1
+  stuck_logs=0, safety_box_stop_logs=10937
+```
+
+与对应对照相比，Z0/Z1 没有关闭 safety-box，却减少了 forced creep / blocked 并提升 DS。这说明当前模型侧 LiDAR BEV 更像 domain-gap 噪声或未充分监督的负贡献。正式结论仍需在重训模型上验证；不要把 runtime zero-LiDAR ablation 直接当作论文 baseline。
 
 ### 什么时候它会变成高优先级
 
@@ -532,9 +584,10 @@ LiDAR / safety-box 应在以下情况升为主线问题：
 
 ### 暂不建议
 
-- 暂不建议直接重启 v10 residual refinement。
+- 暂不建议直接重启下一版 residual refinement。
 - 暂不建议在当前 baseline 中启用 `lidar_seq_len > 1`。
-- 只有当后续决定重训多帧 LiDAR 模型时，v9/v10 才重新成为主线问题。
+- 暂不建议只把当前模型从 `resnet34` 改成 `regnety_032` 后 warm-start。backbone 结构变化会造成大量权重不兼容，应视作新的 full retrain ablation。
+- 只有当后续决定重训多帧 LiDAR 模型时，v9 及其后续 refinement 才重新成为主线问题。
 - 如果要重启多帧 LiDAR，应先明确目标是“模型输入多帧历史 BEV”还是“仅 safety-box runtime 更稳”。前者需要训练接口和 checkpoint 全部变化，后者更像工程诊断和规则修正。
 
 ## Speed / Brake Head
@@ -661,7 +714,8 @@ notes:
 1. 构建 `baseline-condition-v1` soft-clean manifest：`--frame-sampling 5 --skip-first-frames 25 --quality-filter soft_clean`；manifest 必须包含 `target_speed_label` 与 `route_condition_feature` metadata，旧 manifest 需要重建。
 2. 从头训练 `baseline-condition-v1`：`384x1024`、`--image-normalization imagenet`、SpeedHead-v1、route condition token。
 3. open-loop all-scenarios 检查 trajectory 与 speed metrics，尤其关注 `target_speed_l1` 和 brake accuracy。
-4. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12，再跑 220-route。
-5. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
-6. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
-7. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。
+4. 对 LiDAR 分支做少量结构性 retrain ablation，而不是继续只跑 runtime 开关：优先 `no-lidar retrain`；其次才是 `regnety_032 lidar/image encoder retrain` 或补 BEV / agent auxiliary supervision。
+5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12/Z1，再跑 220-route。
+6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
+7. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
+8. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。

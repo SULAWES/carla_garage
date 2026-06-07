@@ -43,6 +43,8 @@
 - 当 `realign_lidar=True` 且 `lidar_seq_len>1` 时，将历史帧 realign 到当前 ego 坐标。
 - `CARLA_Data.lidar_to_histogram_features()` 生成 BEV histogram。
 - 默认 `use_ground_plane=False`，因此每帧 LiDAR 贡献 `1` 个 above-split 通道。
+- 当前 `lidar_seq_len=1`，模型侧只消费当前完整扫描生成的单帧 BEV；更久历史帧 refinement 不是当前主线输入。
+- 当前 `DiffusionDriveConfig.lidar_architecture="resnet34"`，更接近 NAVSIM 原版默认；syb 常用的 `regnety_032` 只是另一个 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain。
 
 LiDAR histogram 参数当前由 `GlobalConfig -> DiffusionDriveConfig` 映射：
 
@@ -78,13 +80,13 @@ NAVSIM 原版 `TransfuserFeatureBuilder._get_camera_feature()` 使用三相机�
 
 ### LiDAR 差异
 
-NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当前 CARLA port 为适应 leaderboard 在线传感器，额外加入：
+NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征；默认 LiDAR backbone 是 `resnet34`。当前 CARLA port 为适应 leaderboard 在线传感器，额外加入：
 
 - 半帧拼接
 - 多帧 buffer
 - 历史帧 realign
 
-这部分当前是工程适配，不应简单按 NAVSIM 单帧路径回退。后续重点仍是验证 BEV 对齐和近场稳定性。
+这部分当前是工程适配，不应简单按 NAVSIM 单帧路径回退。但需要区分模型侧 LiDAR 和 runtime LiDAR：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型输入的 BEV feature，不关闭 raw LiDAR safety-box。Z0/Z1 20-route 诊断更好，说明当前模型侧 BEV LiDAR 可能是负贡献；正式处理应优先做 no-LiDAR full retrain 或补 LiDAR auxiliary supervision，而不是直接关闭 safety-box。
 
 ## 当前结论
 
@@ -116,6 +118,7 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征。当�
 5. 如果后续要做性能消融，可以在冻结主线之外比较：
    - `DIFFUSIONDRIVE_JPEG_ARTIFACT=1/0`
    - `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none/imagenet`
+   - no-LiDAR full retrain vs 当前单帧 BEV LiDAR
    - 单前视 vs 多相机
 
 6. 多相机拼接不是简单预处理开关，需要同时改 leaderboard 传感器注册、图像拼接、训练数据采集和 checkpoint 兼容策略，应作为单独决策项处理。

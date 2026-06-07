@@ -52,3 +52,32 @@ LiDAR
 SpeedHead
 额外的两个condition token
 ResNet34 vs ResNet50
+
+图像输入改成1024*384
+
+ImageNet normalization开关
+
+修正 B2D source image size 记录
+
+manifest / dataset 加 skip-first参数
+    --skip-first-frames 25
+
+SpeedHead-v1
+- 数据层已经有：
+
+    target_speed
+    brake
+    target_speed_twohot
+    target_speed_class
+    target_speed_label_valid
+
+- 还要补：
+
+    model speed head
+    speed loss
+    speed metrics
+    training_config 记录
+
+推理侧 predicted-speed controller 开关
+
+Route condition token

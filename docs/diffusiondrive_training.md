@@ -16,6 +16,8 @@
 
 当前训练 trajectory head 主路径，并新增 `SpeedHead-v1` 纵向速度 / 刹车监督。模型输出的 `trajectory_loss` 是 trajectory head 内部的未加外层权重损失；训练脚本会再乘 `DiffusionDriveConfig.trajectory_weight`。`SpeedHead-v1` 使用 `target_speed_twohot` 做 masked soft cross entropy，再乘 `DiffusionDriveConfig.speed_loss_weight`。当前仍不接入 `agent_states / agent_labels / bev_semantic_map` 辅助 loss。
 
+当前 LiDAR 分支继承的是 NAVSIM-style 单帧 BEV histogram + CNN encoder：`lidar/*.laz` 被栅格化成 `256x256` BEV histogram，再送入 `DiffusionDriveConfig.lidar_architecture` 指定的 `timm` backbone。CARLA DiffusionDrive 默认仍是 `resnet34`，不是 syb / garage 旧模型常用的 `regnety_032`。`regnety_032` 只是另一个 2D CNN backbone，切换它会改变大量权重 shape，应作为新的 full retrain ablation，而不是当前 checkpoint 的部署开关。
+
 训练入口会在输出目录写入：
 
 - `training_config.json`：CLI 参数、DiffusionDrive config、数据 split、B2D Full sensor contract、时间语义、anchor shape、预处理和 status feature schema
@@ -56,7 +58,7 @@
 torchrun --standalone --nproc_per_node=4 team_code/train_diffusiondrive.py ...
 ```
 
-DDP 下 `--batch-size` 是每张 GPU / 每个进程的 batch size，实际 global batch size 为 `batch_size * WORLD_SIZE`。scheduler、`--warmup-steps`、`--val-every-steps`、`--save-every-steps` 都按 optimizer step 计数；由于 DDP 每个 epoch 的 optimizer step 数约为 `ceil(samples / global_batch_size)`，计算 warmup 和保存间隔时要用 global batch size。rank0 负责写 `training_config.json`、sample distribution、validation 和 checkpoint；checkpoint 保存的是未包 DDP 的普通 model state dict，后续单卡或多卡都可以 resume。当前 DDP 使用 `find_unused_parameters=True`，并在 DDP 模式下对 auxiliary outputs 加 `0.0 * output.sum()` dummy term，使未监督 heads 产生零梯度；这不改变数值 loss，只是避免 trajectory-only baseline 下的 DDP unused-branch 问题。
+DDP 下 `--batch-size` 是每张 GPU / 每个进程的 batch size，实际 global batch size 为 `batch_size * WORLD_SIZE`。scheduler、`--warmup-steps`、`--val-every-steps`、`--save-every-steps` 都按 optimizer step 计数；由于 DDP 每个 epoch 的 optimizer step 数约为 `ceil(samples / global_batch_size)`，计算 warmup 和保存间隔时要用 global batch size。rank0 负责写 `training_config.json`、sample distribution、validation 和 checkpoint；checkpoint 保存的是未包 DDP 的普通 model state dict，后续单卡或多卡都可以 resume。当前 DDP 使用 `find_unused_parameters=True`，并在 DDP 模式下对 auxiliary outputs 加 `0.0 * output.sum()` dummy term，使未监督 heads 产生零梯度；这不改变数值 loss，只是避免未监督 auxiliary branches 在 DDP 下触发 unused-branch 问题。
 
 ## Completed Baseline-Basic Run
 
@@ -469,11 +471,11 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - 推理侧新增 `DIFFUSIONDRIVE_LOW_SPEED_STEER=1` 闭环 A/B 开关：低速近似静止但未 brake 时保留横向 PID angle，默认 `0` 以保持 baseline 行为；该开关用于验证低速起步直行是否导致 route deviation。
 - stuck recovery 已支持 env 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD`、`DIFFUSIONDRIVE_CREEP_DURATION`、`DIFFUSIONDRIVE_CREEP_THROTTLE`；未设置时继续使用 `GlobalConfig` 默认值。
 - 推理侧已支持在线 sensor / model override：`DIFFUSIONDRIVE_CAMERA_FOV`、`DIFFUSIONDRIVE_CAMERA_POS`、`DIFFUSIONDRIVE_CAMERA_ROT`、`DIFFUSIONDRIVE_CAMERA_WIDTH`、`DIFFUSIONDRIVE_CAMERA_HEIGHT`、`DIFFUSIONDRIVE_LIDAR_POS`、`DIFFUSIONDRIVE_LIDAR_ROT`、`DIFFUSIONDRIVE_CROP_IMAGE`、`DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT`、`DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH`。这些只影响 closed-loop online agent；训练侧 crop / camera metadata CLI 仍需后续补齐。
-- 推理侧已支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，用于把模型 LiDAR BEV 输入置零做诊断性 ablation；该结果不应直接作为正式 baseline。
+- 推理侧已支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，用于把模型 LiDAR BEV 输入置零做诊断性 ablation；该开关不关闭 raw LiDAR safety-box。20-route Z0/Z1 诊断显示 zero model-LiDAR 反而优于对应对照，说明当前模型侧 LiDAR 分支可能是负贡献；正式 baseline 应通过 no-LiDAR full retrain 或更强 LiDAR supervision 验证，而不是直接把 runtime zero-LiDAR 结果写成最终结论。
 - 推理侧 UKF 已加入 covariance 正定保护和 measurement reset，避免 `filterpy` 在 `P` 非正定时直接导致 agent crash。
 - 闭环 A/B 建议打开 `DIFFUSIONDRIVE_DEBUG_CONTROL=1` 和 `DIFFUSIONDRIVE_DEBUG_INTERVAL=20`，观察 command、desired speed、turn ratio、aim waypoint、angle reset、control、stuck / force_move / stop sign。若排查 route deviation 或 creep / safety-box，可额外打开 `DIFFUSIONDRIVE_DEBUG_ROUTE=1`、`DIFFUSIONDRIVE_DEBUG_SAFETY_BOX=1`；route warning 阈值可用 `DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN`、`DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG` 调整。
 - 远端闭环 A/B 前必须同时同步 `team_code/diffusiondrive_agent.py` 和 `team_code/config.py`；新版 agent 依赖 `GlobalConfig.diffusiondrive_spatial_pid*` 默认参数。
 - 已支持 `torchrun` / DDP 多卡训练；暂不支持 AMP / EMA。
-- 暂不训练 auxiliary heads。
+- 暂不训练 auxiliary heads。原版 NAVSIM 会监督 `agent_states / agent_labels / bev_semantic_map`，这可能也是当前 LiDAR BEV 分支闭环负贡献的原因之一；若后续继续使用 LiDAR，优先考虑补 auxiliary supervision 或做 clean no-LiDAR baseline。
 - `--resume-file` 会恢复 model / optimizer / scheduler / global step，并从 checkpoint 记录的下一个 epoch 继续；中途 step checkpoint 恢复时不会恢复 dataloader 在 epoch 内的位置。
 - `status_feature` 已迁移到 `command_one_hot(6) + speed(1)` 的 `7` 维 schema；speed 暂不归一化。

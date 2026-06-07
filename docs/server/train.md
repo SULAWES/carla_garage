@@ -932,3 +932,49 @@ TRAIN_MANIFEST=/share/home/u19666033/ltr/dd_cache/full_condition_v1_train_syb_cl
 
 并把参数改成：
 --quality-filter syb_clean
+
+### full soft clean
+
+Manifest 缓存
+
+cd ~/ltr/carla_garage
+conda activate ltr_garage_2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+export DATA_ROOT=/share/home/u19666033/djy/carla_dataset
+export CACHE_DIR=/share/home/u19666033/ltr/dd_cache
+mkdir -p ${CACHE_DIR}
+
+export TRAIN_MANIFEST=${CACHE_DIR}/full_condition_v1_train_soft_clean_fs5_skip25_spatial.jsonl
+export VAL_MANIFEST=${CACHE_DIR}/nsj_left_val_fs5_spatial_skip25.jsonl
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir ${DATA_ROOT} \
+    --route-glob "*/*" \
+    --output-manifest ${TRAIN_MANIFEST} \
+    --frame-sampling 5 \
+    --skip-first-frames 25 \
+    --target-mode spatial_path \
+    --balanced-scenarios \
+    --quality-filter soft_clean \
+    --num-workers 16 \
+    --rebuild \
+    --verify-load
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir ${DATA_ROOT}/NonSignalizedJunctionLeftTurn \
+    --route-glob "*" \
+    --output-manifest ${VAL_MANIFEST} \
+    --frame-sampling 5 \
+    --skip-first-frames 25 \
+    --target-mode spatial_path \
+    --max-samples 1024 \
+    --num-workers 16 \
+    --rebuild \
+    --verify-load
+

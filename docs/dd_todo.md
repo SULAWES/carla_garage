@@ -2,12 +2,14 @@
 
 本文档记录基于当前代码状态整理出的 `DiffusionDriveAgent` 后续事项。格式参考旧版 `diffusiondrive_claude.md`，但结论以现在的实现为准。
 
-**更新日期**: 2026-04-26
+**更新日期**: 2026-06-07
 **判断基线**:
 
 - 当前代码状态以 `carla_garage/team_code/diffusiondrive_agent.py` 为准
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
+- 当前模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder；syb 常用的 `regnety_032` 是 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；Z0/Z1 20-route 诊断变好说明模型侧 LiDAR BEV 可能是负贡献，不代表 runtime safety-box 应移除
 - 需要区分两套机制：
 - `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
@@ -56,8 +58,10 @@
   - [x] 用 v3-v9 离线脚本验证动态目标遮挡、粗搜索范围、固定 ROI、common-support、位移先验等路径
   - [x] 用 batch residual 统计排除明显全局固定 `dx/dy` 偏移；当前不优先按外参或坐标系常量偏差修复
   - [x] 新增批量诊断与 contact sheet 输出，便于检查 top scenario 和 worst gain case
+  - [x] 明确当前 baseline 不消费更久历史 BEV，v3-v9 residual refinement 不是当前主线瓶颈
+  - [x] 明确 zero-LiDAR 只诊断模型侧 BEV LiDAR 分支，不能用于判断 safety-box 是否该关闭
   - [ ] 人工检查 `lidar_bev_v9_batch_100_1` 的 contact sheet，确认近场 `0-8m` raw IoU 退化主要来自动态目标、遮挡还是 scorer 偏置
-  - [ ] 下一版 scorer 优先加入近场 `0-8m` raw/dynamic 一致性约束，再用 batch_100 对比 v5/v9
+  - [ ] 当前优先级低于 no-LiDAR / single-frame LiDAR retrain ablation；若后续重启多帧 BEV，再考虑下一版 scorer 加入近场 `0-8m` raw/dynamic 一致性约束并用 batch_100 对比 v5/v9
   - [ ] 低优先级：如果后续仍怀疑 pose 语义，再基于真实 route log 对比当前共享变换公式与标准 SE(2)，不要作为当前主线
 
 - [ ] **Config 体系收敛**
@@ -181,7 +185,7 @@
 - 用简单 route 先做闭环验证
 - 单独记录 creep 触发次数和 emergency stop 次数
 - 根据实测结果微调 `safety_box_*`、`stuck_threshold`、`creep_duration`
-- 当前 20-route 结果显示，单独调 stuck threshold 不如空间 PID 速度参数有效；后续优先做 `speed_fast / speed_slow` 插值实验，并保留 creep / safety-box 触发计数作为辅助指标
+- 当前 20-route 结果显示，单独调 stuck threshold 不如空间 PID 速度参数有效；A10/A11/A12 后纯 PID 插值边际收益下降，后续应把 creep / safety-box 触发计数作为重训候选的辅助指标，而不是继续密集扫控制参数
 
 ---
 
@@ -364,19 +368,20 @@
 ## 建议的推进顺序
 
 1. 基于已完成的 baseline-basic 220 条闭环结果，优先分析 route deviation、blocked、低速和 collisions 的具体触发场景。
-2. 做闭环 A/B：`DIFFUSIONDRIVE_COMMAND_DELAY`、`DIFFUSIONDRIVE_LOW_SPEED_STEER`、空间 PID env 覆盖参数、stuck / creep env 覆盖参数、safety box 阈值，并保持 `STOP_CONTROL=0` 作为 sensor-only 主线。
+2. 保留 `STOP_CONTROL=0` 作为 sensor-only 主线；`STOP_CONTROL=1` 只作为 privileged stop-sign ablation。
 
 注意：早期命名为 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 的 20-route ablation 是在 `DIFFUSIONDRIVE_STUCK_THRESHOLD` 尚未被代码读取时跑出的，不能解释为 stuck threshold 对比，只能作为重复运行 / 随机性参考。后续 `_real` 后缀重跑已经有效：`A5_stuck120_real` / `A6_stuck170_real` / `A7_stuck300_real` 表明单独调 stuck threshold 不是主要突破口，`A8_pid_6_2p5` 和 `A9_pid_7_3` 的空间 PID 速度参数收益更明显。
-3. 对当前最佳 20-route 结果继续做小步插值：优先测试 `speed_fast=6.5, speed_slow=2.75` 以及 `speed_fast=7.0, speed_slow=2.5`，观察能否保留 A9 的低 min-speed penalty，同时降低 collision / timeout。
-4. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
-5. 继续验证 B2D Full raw sensor 与在线 sensor suite 的 FOV / pose / LiDAR gap，判断是否需要推理 sensor contract 对齐或 finetune。
-6. 再考虑是否利用辅助头、显式 speed/control head、闭环导向数据增强或持续学习方法。
+3. A10/A11/A12 和 S1/S2 后，纯 PID / camera geometry 小实验的边际收益已下降；后续闭环预算优先留给重训后的少数候选，而不是继续做密集 PID 插值。
+4. 结合 Z0/Z1 结果，下一步模型侧 LiDAR 优先做 no-LiDAR full retrain；如果 no-LiDAR 确认更稳，再决定是否保留 raw LiDAR safety-box 并移除模型 BEV LiDAR 分支。
+5. 若继续使用模型侧 LiDAR，再考虑 `regnety_032` full retrain 或补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision；不要只把当前 ResNet34 checkpoint warm-start 到 RegNet。
+6. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
+7. 再考虑闭环导向数据增强、持续学习方法、route-aware guard / blend 或更复杂的控制头。
 
 ---
 
 ## 相关文档
 
 - `docs/diffusiondrive_agent_explained.md`: 当前 agent 的实现说明
-- `docs/diffusiondrive_run.md`: 通用运行方法
-- `docs/run.md`: 机器/环境相关运行备忘
+- `docs/run.md`: 早期手工 CARLA / leaderboard debug 命令备忘
+- `docs/diffusiondrive_local_env.md`: 本地 smoke / 环境备忘
 - `docs/outdated/diffusiondrive_claude.md`: 旧版问题分析归档

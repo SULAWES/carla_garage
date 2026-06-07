@@ -46,17 +46,21 @@
 ### 原版 NAVSIM
 - **单帧无缓冲**：只使用 `agent_input.lidars[-1]` 单帧点云。
 - **无坐标重对齐**：开环数据本身就是 ego 坐标系，不需要历史帧变换。
-- **BEV 生成**：直接调用 histogram splat，逻辑与 `carla_garage` 基本一致。
+- **BEV 生成**：直接调用 histogram splat，逻辑与 `carla_garage` 基本一致。默认配置是 `pixels_per_meter=4`、`[-32m,32m]` 范围，得到 `256x256` BEV histogram；默认 `use_ground_plane=False`，实际输入通常是一层 above-ground BEV。
+- **LiDAR backbone**：原版默认 `lidar_architecture="resnet34"`，不是 syb / garage 旧模型中常见的 `regnety_032`。
 
 ### 当前 CARLA Port
 - **半帧拼接**：每步只收到半帧 LiDAR，用 `lidar_last` 与当前帧拼接成完整扫描。
 - **多帧 Buffer**：`lidar_buffer` 长度为 `lidar_seq_len * data_save_freq`；未满时持续刹车等待。
 - **历史帧 Realign**：若 `config.realign_lidar=True` 且 `lidar_seq_len>1`，使用 `align_lidar()` 将历史帧点云变换到当前 ego 坐标系。
+- **模型侧 LiDAR encoder**：当前 DiffusionDrive config 默认仍是 `lidar_architecture="resnet34"`；`GlobalConfig.lidar_architecture="regnety_032"` 没有自动同步到 `DiffusionDriveConfig`。因此当前 CARLA DiffusionDrive 更接近原版 NAVSIM 的 LiDAR backbone，而不是 syb 的 backbone。
 - **来源文件**：`carla_garage/team_code/diffusiondrive_agent.py:444-510`
 
 ### 差异影响
 - **CARLA 端反而更完整**：LiDAR 时序链路已经基本对齐甚至超出原版。只要坐标变换（`lidar_to_ego_coordinate` + `align_lidar`）与 BEV 坐标系假设一致，这一块不是瓶颈。
 - **风险点**：`lidar_to_ego_coordinate()` 将点云旋转平移到 ego 坐标系后，`data.lidar_to_histogram_features()` 中的 `splat_points` 有 `overhead_splat.T`（x/y 轴 swap）。需要确认这个 transpose 与 `align_lidar` 的组合在时序帧上不会引入方向错位（参见第 7 节）。
+- **zero-LiDAR 诊断边界**：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 BEV 输入，不关闭 raw LiDAR safety-box。20-route Z0/Z1 结果显示 zero model-LiDAR 反而提升 DS / RC 并降低 forced creep，这优先指向模型侧 BEV LiDAR 分支的 domain gap 或监督不足，而不是证明 safety-box 应该移除。
+- **backbone 切换边界**：`regnety_032` 是 `timm` 2D CNN 名称，不是 LiDAR 表示方式。若要对齐 syb，应作为 full retrain ablation；仅 warm-start 当前 ResNet34 checkpoint 没有意义。
 
 ---
 
@@ -146,10 +150,11 @@
   - 要么关闭该 loss（`config.use_bev_semantic = False`）；
   - 要么在 CARLA 中重建 BEV label 生成逻辑（可用 OpenDRIVE 地图或 CARLA 的语义 LiDAR/ 相机）。
 - **Agent detection head 的数据格式不兼容**：`LossComputer` 期望的 `targets["agent_states"]` 格式与 `carla_garage/team_code/data.py` 中解析的 bounding box 格式不同。若要在 CARLA 训练该头，需要重写 target builder 或适配 `data.py` 的 box 逻辑。
+- **对 LiDAR 分支的影响**：原版的 LiDAR BEV feature 在训练时还有 BEV semantic / agent detection 等辅助监督约束；当前 CARLA 主线主要训练 trajectory + SpeedHead-v1。这会让 LiDAR 分支更容易学成闭环噪声源，也是 zero-LiDAR 诊断变好的一个合理解释。
 
 ### 建议
 - 在 CARLA 上重新训练时，**第一阶段建议只保留 trajectory loss**，关闭 BEV semantic 和 agent detection，以降低复杂度。
-- 若后续需要利用辅助头进行可视化或 safety check，再逐步接入。
+- 若后续继续保留模型侧 LiDAR，优先考虑两个方向：先做 no-LiDAR full retrain 得到干净对照；再决定是否接入 BEV / agent auxiliary supervision 或 syb-style `regnety_032` backbone。
 
 ---
 

@@ -37,6 +37,8 @@
   - `DIFFUSIONDRIVE_ANCHOR_PATH`
   - `DIFFUSIONDRIVE_CHECKPOINT`
   - `DIFFUSIONDRIVE_BACKBONE_PATH`
+  - `DIFFUSIONDRIVE_JPEG_ARTIFACT`
+  - `DIFFUSIONDRIVE_IMAGE_NORMALIZATION`
   - `DIFFUSIONDRIVE_CAMERA_FOV`
   - `DIFFUSIONDRIVE_CAMERA_POS`
   - `DIFFUSIONDRIVE_CAMERA_ROT`
@@ -48,6 +50,10 @@
   - `DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT`
   - `DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH`
   - `DIFFUSIONDRIVE_ZERO_LIDAR`
+  - `DIFFUSIONDRIVE_USE_ROUTE_CONDITION`
+  - `DIFFUSIONDRIVE_USE_SPEED_HEAD`
+  - `DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT`
+  - `DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH`
   - `DIFFUSIONDRIVE_COMMAND_DELAY`
   - `DIFFUSIONDRIVE_SPATIAL_PID`
   - `DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST`
@@ -201,7 +207,7 @@ stuck recovery 也支持闭环 A/B 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD` 控
 
 creep 本身不是 Bench2Drive leaderboard 的独立指标。日志中 `Detected agent being stuck` 表示 forced creep 正在给最小 throttle；`Creeping stopped by safety box` 表示 creep 已触发但前方 LiDAR safety box 非空，因此被 emergency stop 拦下。分析闭环时需要把这两类日志和 `MinSpeedTest`、`AgentBlockedTest`、timeout 一起看。
 
-推理侧还支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，在模型输入处把 LiDAR BEV 置零。这个开关只用于诊断 LiDAR BEV / safety-box 相关 domain gap，不应直接作为 sensor-only baseline 主结果。
+推理侧还支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，在模型输入处把 LiDAR BEV 置零。这个开关只诊断模型侧 BEV LiDAR 分支，不会关闭 raw LiDAR safety-box、stuck / creep 或 emergency stop 逻辑。本地 Z0/Z1 20-route 结果显示 zero model-LiDAR 反而更好，说明当前模型侧 LiDAR BEV 可能是 domain-gap 噪声或监督不足；正式 baseline 仍应通过 no-LiDAR full retrain 验证，不应把 runtime zero-LiDAR ablation 直接作为主结果。
 
 也就是说，这个 agent 当前不是“直接输出控制量”，而是“输出轨迹，再用经典控制器执行”。
 
@@ -235,12 +241,17 @@ export DIFFUSIONDRIVE_DEBUG_INTERVAL=20
 - `lidar_feature`
   - 来自 `CARLA_Data.lidar_to_histogram_features()`
   - 可来自单帧或多帧 LiDAR buffer
+  - `DIFFUSIONDRIVE_ZERO_LIDAR=1` 时只在模型输入处置零，不关闭 runtime safety-box raw LiDAR
 - `status_feature`
   - 来自 `_build_status()`
+- `route_condition_feature`
+  - 来自 `target_point(2) + target_point_next(2)`
+  - `DIFFUSIONDRIVE_USE_ROUTE_CONDITION=0` 只置零该 token 的输入值，不移除模型结构
 
-模型输出中，当前真正用于控制的只有：
+模型输出中，默认真正用于横向控制的是：
 
 - `outputs['trajectory']`
+- 可选：`DIFFUSIONDRIVE_USE_SPEED_HEAD=1` 时读取 `outputs['target_speed_logits']` 做 predicted-speed longitudinal controller
 
 然后只取前两维：
 
@@ -250,6 +261,7 @@ export DIFFUSIONDRIVE_DEBUG_INTERVAL=20
 
 - 轨迹中的 heading 当前没有进入控制器
 - agent box / semantic 等头虽然模型会输出，但目前未被本 agent 使用
+- speed head 默认不接管控制；默认仍使用空间 PID desired speed fallback
 
 ## 5. 与 `sensor_agent.py` 的关系
 

@@ -243,14 +243,14 @@ l1 > 2: 107
 
 ## 当前判断
 
-当前 trajectory-only baseline 已经证明：
+Stage1/2 的 trajectory-only baseline 已经证明：
 
 - B2D Full 原生数据能训练。
 - `spatial_path` target 和 `99x10x2` anchor 能收敛。
 - scenario-balanced 采样有效。
 - 主要短板已经从“训练链路是否能跑”转为“复杂路口左转 / 静止后起步转向的条件建模和采样权重”。
 - Stage5 / Stage6 的 tuned hard-weight 路线在六场景 eval 上已经把平均预测误差压到较低水平，但它们使用 hard-case weighting / tuned 初始化，不适合作为论文里的 `baseline-basic`。
-- 当前论文基线主线已切换为干净的 `baseline-basic`：B2D Full scenario-balanced 全量训练、`spatial_path` target、`99x10x2` anchor、`command_one_hot(6)+speed(1)` status、sample manifest 缓存、无 hard-case weighting、无 hard-case oversampling、无持续学习方法。
+- 论文基线主线随后切换为干净的 `baseline-basic`：B2D Full scenario-balanced 全量训练、`spatial_path` target、`99x10x2` anchor、`command_one_hot(6)+speed(1)` status、sample manifest 缓存、无 hard-case weighting、无 hard-case oversampling、无持续学习方法。
 
 ## Stage3 / Stage4: Hard-Case Weighting 与 Manifest 长训
 
@@ -420,3 +420,25 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 | `A9_pid_7_3` | 8 | 4623 | 16326 |
 
 这说明 creeping 在上述实验中确实有体现，但不应只从 aggregate DS/RC 推断。A8/A9 明显减少了 safety-box stop loops，但 A9 在个别 route 上有更多实际 forced creep ticks；后续如果继续调闭环，应把 creep/safety-box 触发次数作为独立 debug 指标记录。
+
+### Sensor / LiDAR 20-route diagnostics
+
+后续又在同一类 20-route 诊断集上补了 sensor / LiDAR ablation。结果位于：
+
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_basic/ablation_20routes_sensor/
+```
+
+关键 zero-LiDAR 结果：
+
+| Experiment | Main setting | DS | RC | Infraction penalty | Blocked | Deviated | Timeout | Forced creep ticks | Safety-box stop ticks |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `Z0_zero_lidar_safety_debug` | zero model LiDAR, baseline-like control | 46.7179 | 78.7435 | 0.5754 | 3 | 8 | 0 | 72 | 9733 |
+| `Z1_A9_pid_7_3_zero_lidar_safety_debug` | zero model LiDAR + A9 PID | 53.6419 | 80.9960 | 0.6049 | 3 | 6 | 1 | 0 | 10937 |
+
+解释边界：
+
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 raw LiDAR safety-box。
+- 因此 Z0/Z1 更好，优先说明当前模型侧 LiDAR BEV 分支可能是 domain-gap 噪声或监督不足，而不是说明 safety-box 应该关闭。
+- 当前 DiffusionDrive LiDAR backbone 是 NAVSIM-style `resnet34` BEV encoder，不是 syb 的 `regnety_032`。若要对齐 syb，应作为 full retrain ablation。
+- 下一步 LiDAR 主线优先级：先做 no-LiDAR full retrain；若保留 LiDAR，再考虑 `regnety_032` full retrain 或补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision。

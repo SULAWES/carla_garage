@@ -5,7 +5,7 @@
 ## 当前决策
 
 - 后续训练和模型修改以 Bench2Drive Full 为主要训练数据分布。
-- 当前 raw Bench2Drive / B2D Full loader 不是只用于 smoke 或预训练；它是当前 trajectory-only baseline 的主训练入口。
+- 当前 raw Bench2Drive / B2D Full loader 不是只用于 smoke 或预训练；它是当前 baseline-basic 和 baseline-condition-v1 的主训练入口。
 - 因此训练配置、文档和实验命名应围绕 `b2d_full_raw` 语义记录，而不是默认假设它已经和在线 garage sensor suite 完全一致。
 
 ## B2D Full Raw 输入事实
@@ -52,6 +52,23 @@ B2D Full 原生格式：
 - LiDAR: `x=0.0, y=0.0, z=2.5, yaw=-90`
 - LiDAR histogram: `256x256`, `pixels_per_meter=4.0`
 - 继续复用半帧拼接、多帧 buffer、realign、stuck / safety box 和 PID 控制。
+
+## LiDAR 表示与 Backbone
+
+当前 DiffusionDrive LiDAR 表示更接近原版 NAVSIM，而不是 syb 的旧 garage 模型：
+
+- raw LiDAR / `.laz` 点云会先转成 BEV histogram。
+- 默认 BEV 范围为 `[-32m, 32m] x [-32m, 32m]`，`pixels_per_meter=4`，分辨率 `256x256`。
+- 默认 `use_ground_plane=False`，模型侧通常只收到一层 above-ground BEV feature。
+- `lidar_seq_len=1`，所以当前模型不消费更久历史 BEV；半帧拼接只是为了得到当前完整扫描。
+- 当前 CARLA DiffusionDrive 的 `DiffusionDriveConfig.lidar_architecture` 默认是 `resnet34`。syb 常用的 `regnety_032` 是另一个 `timm` 2D CNN backbone，不是 LiDAR 专用表示；切换它需要 full retrain。
+
+需要区分两条 LiDAR 使用路径：
+
+- 模型侧 LiDAR：BEV histogram 作为 `lidar_feature` 输入 DiffusionDrive backbone。
+- runtime LiDAR：raw / buffered LiDAR 用于 safety-box、stuck / creep 等规则逻辑。
+
+`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 runtime safety-box raw LiDAR。因此 zero-LiDAR 诊断变好时，优先说明模型侧 BEV LiDAR 分支存在 domain gap / 监督不足风险，不能直接推出 safety-box 应该关闭。
 
 ## 已知 Gap
 

@@ -24,6 +24,8 @@
 
 ## 已验证
 
+注意：本文早期 smoke 记录来自 NAVSIM checkpoint / baseline-basic 迁移阶段，其中部分 run 使用旧模型输入 `256x1024`。当前 `DiffusionDriveConfig` 和 `train_diffusiondrive.py` 默认模型输入已切到 `384x1024`，`baseline-condition-v1` 也以 `384x1024` 为主线；如果要把本地 smoke 作为当前验证结论，需要按新默认重新运行一次。
+
 - config 自动推导：
   - `num_anchor_modes = 99`
   - `num_poses = 10`
@@ -44,9 +46,11 @@
   - `shape mismatch = 11`
   - `setup_ok cpu 99 10 (99, 10, 2)`
 - 伪输入 `run_step()` smoke 通过：
-  - camera feature：`(1, 3, 256, 1024)`
+  - 历史记录 camera feature：`(1, 3, 256, 1024)`
+  - 当前默认期望 camera feature：`(1, 3, 384, 1024)`
   - LiDAR feature：`(1, 1, 256, 256)`
   - status feature：`(1, 7)`
+  - route condition feature：`(1, 4)`
   - trajectory：`(1, 10, 2)`
 - Bench2Drive mini 单样本 smoke 通过：
   - 数据目录：`/home/HeavenlySU/sitp_workspace/carla_garage/Bench2Drive/Bench2Drive-mini-extracted`

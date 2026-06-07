@@ -7,7 +7,7 @@
 ### 当前主线文档
 
 - [dd_todo.md](dd_todo.md)：当前 DiffusionDriveAgent 后续事项和优先级。
-- [diffusiondrive_lidar_bev_alignment_issues.md](diffusiondrive_lidar_bev_alignment_issues.md)：LiDAR / BEV 对齐从 `v3` 到 `v10` 的详细排查记录和实验结论。
+- [diffusiondrive_lidar_bev_alignment_issues.md](diffusiondrive_lidar_bev_alignment_issues.md)：LiDAR / BEV 对齐从 `v3` 到 `v9` 的详细排查记录、实验结论和当前优先级边界。
 - [diffusiondrive_agent_explained.md](diffusiondrive_agent_explained.md)：当前 CARLA 侧 DiffusionDriveAgent 结构说明。
 - [diffusiondrive_navsim_vs_carla_gap.md](diffusiondrive_navsim_vs_carla_gap.md)：NAVSIM 原版 DiffusionDrive 与 CARLA Garage 环境差异。
 - [diffusiondrive_input_preprocessing.md](diffusiondrive_input_preprocessing.md)：当前 DiffusionDrive 输入预处理核对和训练前决策项。
@@ -32,7 +32,7 @@
 
 - [coordinate_systems.md](coordinate_systems.md)：坐标系相关说明。
 - [engineering.md](engineering.md)：工程实现和维护说明。
-- [run.md](run.md)：仓库通用运行说明。
+- [run.md](run.md)：早期手工 CARLA / leaderboard debug 命令备忘；当前训练和评测命令优先看主线 DiffusionDrive 文档。
 - [ltr.md](ltr.md)：LTR / 远程实验相关记录。
 - [history.md](history.md)：历史记录。
 - [done.md](done.md)：已完成事项。

@@ -4,6 +4,13 @@
 
 ## 总体判断
 
+当前 baseline 主线补充判断：
+
+- 这份文档记录的是离线多帧 LiDAR BEV residual alignment / refinement 排查，不等同于当前模型侧 LiDAR 主路径。
+- 当前 DiffusionDrive baseline 使用 `lidar_seq_len=1`，模型不消费更久历史 BEV；v3-v9 refinement 暂不作为下一轮 baseline-condition-v1 的优先修复项。
+- Z0/Z1 20-route zero-LiDAR 诊断显示，置零模型侧 LiDAR BEV 反而更好；该开关不关闭 raw LiDAR safety-box。因此当前更优先的问题是模型侧 LiDAR BEV 是否应保留、如何监督，而不是马上继续扩大多帧 refinement。
+- 若后续重启多帧 LiDAR，本文件的 v9 / 近场 `0-8m` 诊断仍然是参考起点。
+
 当前最重要的结论：
 
 - measurement-based alignment 整体是有效的，`v3` 批量结果已经证明平均 IoU 有正收益。
@@ -339,11 +346,11 @@ python tools/make_lidar_bev_contact_sheet.py \
 - 如果某些 scenario 有稳定局部偏差，应做 scenario 级专项分析，不应上升为全局外参修正。
 - 批量验证仍使用 `batch_100` 作为第一关，只有同时满足 raw gain 不下降、bad rate 不上升、translation norm 不发散，才扩大到更多 route。
 
-下一版候选方向：
+下一版 scorer 候选方向：
 
-- `v10` 可以保留 `v9` 的 residual-motion prior 和 support fallback。
-- `v10` 的 score 应同时考虑 common-support IoU、dynamic IoU、近场 raw/dynamic IoU。
-- `v10` 应把 `0-8m` raw/dynamic gain 作为硬约束或高权重项，避免中远场收益掩盖近场退化。
+- 可以保留 `v9` 的 residual-motion prior 和 support fallback。
+- score 应同时考虑 common-support IoU、dynamic IoU、近场 raw/dynamic IoU。
+- 应把 `0-8m` raw/dynamic gain 作为硬约束或高权重项，避免中远场收益掩盖近场退化。
 
 
 ## 仍然失败的部分

@@ -1,3 +1,5 @@
+> 注意：本文是早期手工 CARLA / leaderboard debug 命令备忘，包含旧 NAVSIM checkpoint 路径和双窗口 / tmux 流程。当前 DiffusionDrive 训练、开环评估、闭环脚本和 baseline-condition-v1 进度以 `docs/diffusiondrive_training.md`、`docs/diffusiondrive_remote_training_progress.md`、`docs/diffusiondrive_baseline_next_steps.md` 和 `tools/run_baseline_basic_closed_loop.sh` 为准。不要把本文命令直接当作当前 full baseline 或 condition-v1 的标准命令。
+
 申请GPU
 srun -p L40 -J ltr_debug -w gpu4013 -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=6 --pty /bin/bash
 

@@ -2,7 +2,7 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-06-04
+**更新日期**: 2026-06-07
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
@@ -10,6 +10,7 @@
 - full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - baseline-basic 开环 / 闭环结果已完成并下载到本地 `dd_logs` 镜像路径；open-loop six-scene `l1_mean=0.0092`，all-scenarios `l1_mean=0.0192`，Bench2Drive 220 closed-loop `DS=44.81`、`RC=79.48`、`NDS=35.52`
 - baseline-basic 已完成一组 20-route 闭环 A/B；当前最明显正向方向是空间 PID 速度参数，`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` DS/NDS 最高但 collision / timeout 风险更高
+- 20-route Z0/Z1 zero-LiDAR 诊断显示模型侧 LiDAR BEV 可能是负贡献：zero-LiDAR 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；因此下一步 LiDAR 方向应优先做 no-LiDAR full retrain 或补 LiDAR auxiliary supervision，而不是直接重启多帧 BEV refinement
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -127,8 +128,13 @@
   - [ ] 评估单前视与多相机的收益差异
 
 - [ ] **LiDAR 表征方案验证**
+  - [x] 明确当前 CARLA DiffusionDrive 模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + CNN encoder，默认 `DiffusionDriveConfig.lidar_architecture="resnet34"`，不是 syb 的 `regnety_032`
+  - [x] 明确 `regnety_032` 是 `timm` 2D CNN backbone 名称，不是 LiDAR 专用表示；切换它需要 full retrain，不能用当前 ResNet34 checkpoint warm-start 得到正式结论
+  - [x] 记录 zero-LiDAR 诊断边界：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 safety-box raw LiDAR
+  - [ ] 优先做 no-LiDAR full retrain，验证当前模型侧 LiDAR BEV 是否确实是负贡献
+  - [ ] 如继续使用 LiDAR，再评估 `regnety_032` full retrain 或 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision
   - [ ] 验证 raw Bench2Drive LiDAR `x=-0.39,z=1.84,yaw=0,range=85` 与 garage 在线 LiDAR `x=0,z=2.5,yaw=-90` 的训练/推理 gap
-  - [ ] 明确是否始终使用多帧 LiDAR
+  - [ ] 暂不把多帧 LiDAR 作为当前主线；只有 no-LiDAR / 单帧 LiDAR 结论明确后，再决定是否启用 `lidar_seq_len>1`
   - [ ] 明确 histogram 参数是否沿用当前 garage 设置
   - [ ] 验证时序 realign 对训练标签的一致性
 
@@ -150,6 +156,7 @@
 
 - [ ] **辅助头训练策略**
   - [ ] 评估是否保留 `agent_states / agent_labels / bev_semantic_map`
+  - [ ] 若保留模型侧 LiDAR，优先评估这些辅助头是否能给 BEV / obstacle representation 更强监督，避免 LiDAR 分支在 trajectory / speed 监督不足时成为闭环噪声
   - [ ] 明确多任务损失是否继续保留
 
 - [ ] **评测与控制闭环设计**
@@ -200,9 +207,9 @@
 - stuck detection
 - safety box
 
-这为后续训练时是否采用多帧 LiDAR，以及训练后如何做闭环调参，提供了直接参考。
+这为后续训练后如何做闭环调参提供了直接参考。多帧 LiDAR 目前不再是默认下一步，应先完成 no-LiDAR / 单帧 BEV LiDAR 的 clean retrain 对照。
 
-#### 3. 新聚类 anchor 已提取，但尚未接入当前链路
+#### 3. 新聚类 anchor 已提取并接入当前链路
 
 当前仓库根目录下已存在：
 
@@ -319,8 +326,10 @@
 
 1. 单前视 vs 多相机
 2. 当前 resize / crop 方案 vs 备选方案
-3. 单帧 LiDAR vs 多帧 LiDAR
+3. no-LiDAR full retrain vs 当前单帧 BEV LiDAR
 4. 是否保留 JPEG artifact
+
+多帧 LiDAR 暂不作为当前优先消融。Z0/Z1 已经说明模型侧 BEV LiDAR 可能是负贡献；在确认 no-LiDAR / 单帧 LiDAR 的 clean retrain 结论前，直接增加历史帧会让归因更复杂。
 
 ### 5. 轨迹表示需要在训练前统一
 
@@ -395,13 +404,13 @@
 
 ## 建议的推进顺序
 
-1. 冻结训练输入定义
-2. 冻结轨迹标签与 anchor 方案
-3. 固定数据采集规范
-4. 做最小规模输入消融
-5. 开始正式训练
-6. 训练后单独调 `safety_box_*`、stuck recovery 和日志策略
-7. 最后再考虑控制器与辅助头增强
+1. 使用 soft-clean + skip-first manifest 从头训练 `baseline-condition-v1`，保持 `384x1024`、ImageNet normalization、SpeedHead-v1 和 route condition token。
+2. open-loop all-scenarios 检查 trajectory / speed metrics，尤其是 `target_speed_l1`、brake accuracy 和坏场景 top-k。
+3. 结合 Z0/Z1 结果，优先做 no-LiDAR full retrain，验证模型侧 LiDAR BEV 是否应从 baseline-condition-v1 移除。
+4. 若 no-LiDAR 不稳定，再考虑保留单帧 LiDAR 并补 auxiliary supervision，或做 `regnety_032` full retrain；不要直接 warm-start 当前 ResNet34 checkpoint。
+5. 训练后只把少数候选放到固定 20-route 闭环，接近或超过 A8/A9/A12/Z1 后再跑 220-route。
+6. 闭环阶段继续记录 `safety_box_*`、stuck / creep 和 route deviation debug，但不再密集扫 PID 插值。
+7. 最后再考虑持续学习、route-aware guard / blend、sensor-only stop sign 和更复杂控制头。
 
 ---
 
@@ -409,5 +418,5 @@
 
 - `docs/dd_todo.md`: 推理侧后续事项
 - `docs/diffusiondrive_agent_explained.md`: 当前 agent 的实现说明
-- `docs/diffusiondrive_run.md`: 通用运行方法
-- `docs/run.md`: 机器/环境相关运行备忘
+- `docs/run.md`: 早期手工 CARLA / leaderboard debug 命令备忘
+- `docs/diffusiondrive_local_env.md`: 本地 smoke / 环境备忘
