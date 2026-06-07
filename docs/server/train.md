@@ -974,6 +974,7 @@ python tools/build_diffusiondrive_manifest.py \
     --skip-first-frames 25 \
     --target-mode spatial_path \
     --max-samples 1024 \
+    --balanced-scenarios \
     --num-workers 16 \
     --rebuild \
     --verify-load
@@ -1032,7 +1033,7 @@ team_code/train_diffusiondrive.py \
     --frame-sampling 5 \
     --skip-first-frames 25 \
     --balanced-scenarios \
-    --num-workers 5 \
+    --num-workers 12 \
     --prefetch-factor 2 \
     --persistent-workers \
     --scheduler cosine \
