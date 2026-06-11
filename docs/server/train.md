@@ -1035,7 +1035,6 @@ team_code/train_diffusiondrive.py \
     --balanced-scenarios \
     --num-workers 12 \
     --prefetch-factor 2 \
-    --persistent-workers \
     --scheduler cosine \
     --warmup-steps ${WARMUP_STEPS} \
     --min-lr 1e-6 \

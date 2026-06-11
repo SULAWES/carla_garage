@@ -622,7 +622,8 @@ steer: diffusion trajectory + lateral controller
 throttle/brake: predicted target_speed/brake + longitudinal controller
 ```
 
-这比继续从空间 checkpoint 间距反推 desired speed 更稳，也比马上切 time-based anchors 工程风险更低。
+这是 `SpeedHead-v1` 的设计目标：补足空间 checkpoint 缺少纵向时间语义的问题，并保留 trajectory head 不变。
+但当前第一版推理实现把 speed head 直接接管为 longitudinal desired speed，闭环已证明过于激进，不能作为正式候选直接继续跑。
 
 ### 当前实现状态
 
@@ -631,6 +632,9 @@ throttle/brake: predicted target_speed/brake + longitudinal controller
 - 训练日志已记录 `target_speed_loss`、`target_speed_accuracy`、`target_speed_brake_accuracy`、`target_speed_l1`。
 - agent 推理侧已新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller；默认关闭，当前 spatial PID desired speed 仍作为 fallback。
 - open-loop 先输出 speed classification / brake accuracy / target speed MAE，再只对少数候选跑 20-route。
+- 2026-06-09 的 20-route 初筛 `C1_speedhead` 已暴露 direct controller 失败模式：route 00 前几百 step 反复预测 `speed_head_class=0`、`desired_speed=0`、`brake=1`，车辆从起步阶段被锁死；已观察到 route 00 得分约 `2.35`、route 24 得分约 `52.44`，远低于 baseline-basic A0 在同两条 route 上的约 `93.8 / 76.5`。
+- 因此当前不要继续跑 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` direct controller 的 20-route / 220-route；`baseline-condition-v1` 闭环应先固定 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0`，使用 A8/A9 类 spatial PID fallback 评估 trajectory + route token 的收益。
+- 后续若继续使用 speed head，应改成 gated longitudinal helper，例如只做 speed cap / brake gate / stop confidence gate，而不是在低速起步时允许 class 0 直接把 desired speed 置零并触发全刹。
 
 ## Route Condition Tokens
 
@@ -711,9 +715,9 @@ notes:
 
 ## 当前推荐优先级
 
-1. 构建 `baseline-condition-v1` soft-clean manifest：`--frame-sampling 5 --skip-first-frames 25 --quality-filter soft_clean`；manifest 必须包含 `target_speed_label` 与 `route_condition_feature` metadata，旧 manifest 需要重建。
-2. 从头训练 `baseline-condition-v1`：`384x1024`、`--image-normalization imagenet`、SpeedHead-v1、route condition token。
-3. open-loop all-scenarios 检查 trajectory 与 speed metrics，尤其关注 `target_speed_l1` 和 brake accuracy。
+1. `baseline-condition-v1` soft-clean + skip-first full retrain 已完成，先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` 的 spatial PID fallback 跑固定 20-route，隔离 trajectory + route token 的闭环效果。
+2. 不再继续跑 `C1_speedhead` direct longitudinal controller；该路径已在 route 00 起步阶段出现 class-0 全刹锁死，必须先重构为 gated speed/brake helper。
+3. open-loop all-scenarios 结果显示 condition-v1 轨迹误差略弱于 baseline-basic，但部分 left-turn / noScenarios / MergerIntoSlowTraffic 有改善；闭环结论仍需看 C0/C2 fallback。
 4. 对 LiDAR 分支做少量结构性 retrain ablation，而不是继续只跑 runtime 开关：优先 `no-lidar retrain`；其次才是 `regnety_032 lidar/image encoder retrain` 或补 BEV / agent auxiliary supervision。
 5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12/Z1，再跑 220-route。
 6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。

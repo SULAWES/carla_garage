@@ -1242,3 +1242,163 @@ run20 Z1_A9_pid_7_3_zero_lidar_safety_debug \
     DIFFUSIONDRIVE_DEBUG_INTERVAL=20 \
     DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=7.0 \
     DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=3.0
+
+
+### full soft-clean
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+export DATA_ROOT=/share/home/u19666033/djy/carla_dataset
+export CACHE_DIR=/share/home/u19666033/ltr/dd_cache
+export LOGDIR=/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1
+export RUN_ID=soft_clean_skip25_imgnet_ddp4_bs64x4_lr6e-4_ep100
+export RUN_DIR=${LOGDIR}/${RUN_ID}
+export CKPT=${RUN_DIR}/latest.pth
+export ANCHOR=/share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy
+export BACKBONE=/share/home/u19666033/ltr/pytorch_model.bin
+export OUT_DIR=${RUN_DIR}/open_loop_eval
+
+2. 构建 all-scenarios eval manifest
+
+export ALL_EVAL_MANIFEST=${CACHE_DIR}/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial.jsonl
+
+python tools/build_diffusiondrive_manifest.py \
+    --root-dir ${DATA_ROOT} \
+    --route-glob "*/*" \
+    --output-manifest ${ALL_EVAL_MANIFEST} \
+    --frame-sampling 5 \
+    --skip-first-frames 25 \
+    --target-mode spatial_path \
+    --balanced-scenarios \
+    --max-samples-per-scenario 1024 \
+    --quality-filter soft_clean \
+    --num-workers 32 \
+    --rebuild \
+    --verify-load
+
+3. all-scenarios 主开环评测
+
+python tools/inspect_diffusiondrive_eval_errors.py \
+    --root-dir ${DATA_ROOT} \
+    --route-glob "*/*" \
+    --sample-manifest ${ALL_EVAL_MANIFEST} \
+    --checkpoint ${CKPT} \
+    --top-k 200 \
+    --frame-sampling 5 \
+    --skip-first-frames 25 \
+    --target-mode spatial_path \
+    --balanced-scenarios \
+    --max-samples-per-scenario 1024 \
+    --model-image-height 384 \
+    --model-image-width 1024 \
+    --image-normalization imagenet \
+    --batch-size 32 \
+    --num-workers 6 \
+    --device cuda:0 \
+    --anchor-path ${ANCHOR} \
+    --backbone-path ${BACKBONE} \
+    --output-csv ${OUT_DIR}/all_scenarios_errors.csv \
+    2>&1 | tee ${OUT_DIR}/all_scenarios_eval.log
+
+
+下面这套直接按你原来的 run20 风格写。建议先跑两个主对照：C0_A8_pid_fallback 和 C1_speedhead。如果时间够，再跑
+C2_A9_pid_fallback。
+
+cd ~/ltr/carla_garage
+conda activate ltr_garage_2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export OPENCV_NUM_THREADS=1
+
+ROUTES="24 0 94 50 139 9 15 212 115 185 153 203 105 19 101 4 167 194 102 43"
+
+COND_RUN_ID=soft_clean_skip25_imgnet_ddp4_bs64x4_lr6e-4_ep100
+COND_ROOT=/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1/${COND_RUN_ID}
+COND_CKPT=${COND_ROOT}/latest.pth
+
+BASE_OUT=/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1/ablation_20routes
+
+COMMON_ENV="\
+CKPT=${COND_CKPT} \
+ANCHOR_PATH=/share/home/u19666033/ltr/4-0-0-1910-tracked_clusters_anchor.npy \
+BACKBONE_PATH=/share/home/u19666033/ltr/pytorch_model.bin \
+STOP_CONTROL=0 \
+DIFFUSIONDRIVE_JPEG_ARTIFACT=1 \
+DIFFUSIONDRIVE_IMAGE_NORMALIZATION=imagenet \
+DIFFUSIONDRIVE_MODEL_IMAGE_HEIGHT=384 \
+DIFFUSIONDRIVE_MODEL_IMAGE_WIDTH=1024 \
+DIFFUSIONDRIVE_USE_ROUTE_CONDITION=1 \
+DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT=0 \
+DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH=0 \
+DIFFUSIONDRIVE_COMMAND_DELAY=0 \
+DIFFUSIONDRIVE_DEBUG_CONTROL=1 \
+DIFFUSIONDRIVE_DEBUG_INTERVAL=20"
+
+run20 () {
+    EXP=$1
+    shift
+    for IDX in ${ROUTES}; do
+        env \
+        OUT=${BASE_OUT}/${EXP} \
+        START_IDX=${IDX} \
+        END_IDX=${IDX} \
+        MAX_ATTEMPTS=2 \
+        CARLA_READY_TIMEOUT=180 \
+        "$@" \
+        bash tools/run_baseline_basic_closed_loop.sh
+    done
+
+    python tools/result_parser.py \
+        --xml leaderboard/data/bench2drive220.xml \
+        --results ${BASE_OUT}/${EXP}/results
+}
+
+先跑 A8 fallback，和 baseline-basic 里较均衡的 PID 对齐：
+
+run20 C0_A8_pid_6_2p5_fallback \
+    ${COMMON_ENV} \
+    DIFFUSIONDRIVE_USE_SPEED_HEAD=0 \
+    DIFFUSIONDRIVE_SPATIAL_PID=1 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=6.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5
+
+再跑 speed head 主实验，只改纵向控制来源：
+
+run20 C1_speedhead \
+    ${COMMON_ENV} \
+    DIFFUSIONDRIVE_USE_SPEED_HEAD=1 \
+    DIFFUSIONDRIVE_SPATIAL_PID=1 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=6.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5
+
+如果还要和 A9 高分但偏激进的 PID 对照：
+
+run20 C2_A9_pid_7_3_fallback \
+    ${COMMON_ENV} \
+    DIFFUSIONDRIVE_USE_SPEED_HEAD=0 \
+    DIFFUSIONDRIVE_SPATIAL_PID=1 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=7.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=3.0
+
+可选再做一个 route-token ablation，但不要和主结果混在一起解释：
+
+run20 C3_A8_zero_route_token \
+    ${COMMON_ENV} \
+    DIFFUSIONDRIVE_USE_ROUTE_CONDITION=0 \
+    DIFFUSIONDRIVE_USE_SPEED_HEAD=0 \
+    DIFFUSIONDRIVE_SPATIAL_PID=1 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST=6.0 \
+    DIFFUSIONDRIVE_SPATIAL_PID_SPEED_SLOW=2.5
+
+跑完后结果会在：
+
+/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1/ablation_20routes/<EXP>/results
