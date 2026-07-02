@@ -630,11 +630,11 @@ throttle/brake: predicted target_speed/brake + longitudinal controller
 - manifest / dataset 已缓存 `target_speed` 和 `brake`，并记录 syb two-hot speed label schema。
 - model 已新增独立 speed query + MLP head；训练 loss 使用 `target_speed_twohot` masked soft cross entropy。
 - 训练日志已记录 `target_speed_loss`、`target_speed_accuracy`、`target_speed_brake_accuracy`、`target_speed_l1`。
-- agent 推理侧已新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller；默认关闭，当前 spatial PID desired speed 仍作为 fallback。
+- agent 推理侧已新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller；默认关闭，当前 spatial PID desired speed 仍作为 fallback。2026-06-11 起，该路径默认采用 syb-style uncertainty-weighted speed conversion：`DIFFUSIONDRIVE_SPEED_HEAD_UNCERTAINTY_WEIGHT=1` 时仅当 class-0 概率超过 `DIFFUSIONDRIVE_SPEED_HEAD_BRAKE_THRESHOLD`（默认 `0.9`）才强制 `desired_speed=0`，否则使用 `sum(prob * target_speeds)`。
 - open-loop 先输出 speed classification / brake accuracy / target speed MAE，再只对少数候选跑 20-route。
 - 2026-06-09 的 20-route 初筛 `C1_speedhead` 已暴露 direct controller 失败模式：route 00 前几百 step 反复预测 `speed_head_class=0`、`desired_speed=0`、`brake=1`，车辆从起步阶段被锁死；已观察到 route 00 得分约 `2.35`、route 24 得分约 `52.44`，远低于 baseline-basic A0 在同两条 route 上的约 `93.8 / 76.5`。
-- 因此当前不要继续跑 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` direct controller 的 20-route / 220-route；`baseline-condition-v1` 闭环应先固定 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0`，使用 A8/A9 类 spatial PID fallback 评估 trajectory + route token 的收益。
-- 后续若继续使用 speed head，应改成 gated longitudinal helper，例如只做 speed cap / brake gate / stop confidence gate，而不是在低速起步时允许 class 0 直接把 desired speed 置零并触发全刹。
+- 因此旧 C1 不能作为新版 speed-head 结论继续外推。新一轮若启用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1`，必须显式记录 uncertainty-weighted conversion env，并先重跑 route 00 / 24 sanity，再跑固定 20-route；`DIFFUSIONDRIVE_SPEED_HEAD_UNCERTAINTY_WEIGHT=0` 的 argmax direct 只保留为诊断，不应作为正式候选。
+- 该修复仍属于 direct desired-speed controller 的保守版，不是最终 gated speed cap / brake gate；若 20-route 仍有低速锁死或碰撞，应继续升级为“spatial PID 主控 + speed-head 只限速/高置信刹车”的 helper。
 
 ## Route Condition Tokens
 
@@ -716,8 +716,8 @@ notes:
 ## 当前推荐优先级
 
 1. `baseline-condition-v1` soft-clean + skip-first full retrain 已完成，先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` 的 spatial PID fallback 跑固定 20-route，隔离 trajectory + route token 的闭环效果。
-2. 不再继续跑 `C1_speedhead` direct longitudinal controller；该路径已在 route 00 起步阶段出现 class-0 全刹锁死，必须先重构为 gated speed/brake helper。
-3. open-loop all-scenarios 结果显示 condition-v1 轨迹误差略弱于 baseline-basic，但部分 left-turn / noScenarios / MergerIntoSlowTraffic 有改善；闭环结论仍需看 C0/C2 fallback。
+2. 旧 `C1_speedhead` direct longitudinal controller 已失败；2026-06-11 已按 syb 思路改为 uncertainty-weighted speed conversion，下一步可用新实验名先跑 route 00 / 24 sanity，再决定是否跑 20-route。
+3. open-loop all-scenarios 结果显示 condition-v1 轨迹误差略弱于 baseline-basic，但部分 left-turn / noScenarios / MergerIntoSlowTraffic 有改善；闭环结论仍需看 C0/C2 fallback 和新版 speed-head sanity。
 4. 对 LiDAR 分支做少量结构性 retrain ablation，而不是继续只跑 runtime 开关：优先 `no-lidar retrain`；其次才是 `regnety_032 lidar/image encoder retrain` 或补 BEV / agent auxiliary supervision。
 5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12/Z1，再跑 220-route。
 6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。

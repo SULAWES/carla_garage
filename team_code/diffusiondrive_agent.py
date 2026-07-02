@@ -14,6 +14,10 @@ Env vars:
   - DIFFUSIONDRIVE_USE_ROUTE_CONDITION: feed target_point/target_point_next route token
     values (default: 1); 0 keeps the model token but zeros its values for ablation.
   - DIFFUSIONDRIVE_USE_SPEED_HEAD: use predicted target speed for longitudinal control (default: 0).
+  - DIFFUSIONDRIVE_SPEED_HEAD_UNCERTAINTY_WEIGHT: when speed-head control is enabled,
+    use syb-style probability-weighted target speed instead of argmax (default: 1).
+  - DIFFUSIONDRIVE_SPEED_HEAD_BRAKE_THRESHOLD: probability of class 0 required to force
+    target speed 0 in uncertainty-weighted mode (default: 0.9).
   - DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT: allow missing/mismatched model tensors (default: 0).
   - DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH: allow checkpoint preprocessing metadata mismatch (default: 0).
   - DIFFUSIONDRIVE_ZERO_LIDAR: replace LiDAR BEV with zeros for diagnostic ablation (default: 0).
@@ -142,6 +146,16 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.zero_lidar = strtobool(os.environ.get("DIFFUSIONDRIVE_ZERO_LIDAR", "0"))
         self.use_route_condition = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_ROUTE_CONDITION", "1"))
         self.use_speed_head_controller = strtobool(os.environ.get("DIFFUSIONDRIVE_USE_SPEED_HEAD", "0"))
+        self.speed_head_uncertainty_weight = strtobool(os.environ.get(
+            "DIFFUSIONDRIVE_SPEED_HEAD_UNCERTAINTY_WEIGHT",
+            "1",
+        ))
+        self.speed_head_brake_threshold = env_float("DIFFUSIONDRIVE_SPEED_HEAD_BRAKE_THRESHOLD", 0.9)
+        if not 0.0 <= self.speed_head_brake_threshold <= 1.0:
+            raise RuntimeError(
+                "DIFFUSIONDRIVE_SPEED_HEAD_BRAKE_THRESHOLD must be in [0, 1], "
+                f"got {self.speed_head_brake_threshold}."
+            )
         self.allow_partial_checkpoint = strtobool(os.environ.get("DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT", "0"))
         self.allow_preprocess_mismatch = strtobool(os.environ.get("DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH", "0"))
         self.use_command_delay = strtobool(os.environ.get("DIFFUSIONDRIVE_COMMAND_DELAY", "0"))
@@ -197,6 +211,11 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive zero LiDAR:", self.zero_lidar)
         print("DiffusionDrive route condition values:", self.use_route_condition)
         print("DiffusionDrive speed-head longitudinal control:", self.use_speed_head_controller)
+        print(
+            "DiffusionDrive speed-head inference: "
+            f"uncertainty_weight={self.speed_head_uncertainty_weight}, "
+            f"brake_threshold={self.speed_head_brake_threshold}"
+        )
         print("DiffusionDrive allow partial checkpoint:", self.allow_partial_checkpoint)
         print("DiffusionDrive allow preprocessing mismatch:", self.allow_preprocess_mismatch)
 
@@ -790,16 +809,33 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         class_speeds = _TARGET_SPEED_CLASSES_MPS.to(dtype=probs.dtype)
         pred_class = int(torch.argmax(probs).item())
         expected_speed = float(torch.sum(probs * class_speeds).item())
-        if pred_class == 0:
-            expected_speed = 0.0
+        brake_prob = float(probs[0].item())
+        argmax_speed = float(class_speeds[pred_class].item())
+
+        if self.speed_head_uncertainty_weight:
+            if brake_prob > self.speed_head_brake_threshold:
+                desired_speed = 0.0
+                selection = "prob_brake"
+            else:
+                desired_speed = expected_speed
+                selection = "prob_expectation"
+        else:
+            desired_speed = argmax_speed
+            selection = "argmax"
+
         self.last_speed_head_debug = {
             "available": True,
             "pred_class": pred_class,
-            "desired_speed": expected_speed,
-            "brake_prob": float(probs[0].item()),
+            "desired_speed": desired_speed,
+            "expected_speed": expected_speed,
+            "argmax_speed": argmax_speed,
+            "brake_prob": brake_prob,
             "max_prob": float(torch.max(probs).item()),
+            "brake_threshold": float(self.speed_head_brake_threshold),
+            "uncertainty_weight": bool(self.speed_head_uncertainty_weight),
+            "selection": selection,
         }
-        return expected_speed
+        return desired_speed
 
     def _spatial_path_geometry(self, waypoints):
         if waypoints.shape[0] == 0:
@@ -1199,8 +1235,11 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             f"route_warning={route_debug.get('warning')} "
             f"speed_head={speed_head_debug.get('available', False)} "
             f"speed_head_class={speed_head_debug.get('pred_class')} "
+            f"speed_head_selection={speed_head_debug.get('selection')} "
             f"speed_head_desired={speed_head_debug.get('desired_speed', float('nan')):.3f} "
+            f"speed_head_expected={speed_head_debug.get('expected_speed', float('nan')):.3f} "
             f"speed_head_brake_prob={speed_head_debug.get('brake_prob', float('nan')):.3f} "
+            f"speed_head_max_prob={speed_head_debug.get('max_prob', float('nan')):.3f} "
             f"control=(steer={float(self.control.steer):.3f},"
             f"throttle={float(self.control.throttle):.3f},"
             f"brake={float(self.control.brake):.3f}) "

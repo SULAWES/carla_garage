@@ -82,8 +82,9 @@
   - [x] `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` 时将纵向 desired speed 切到 predicted target speed；默认 `0` 保留当前 spatial PID fallback
   - [x] 在 debug log 中记录 predicted target speed、brake prob、最终 throttle/brake、fallback 状态
   - [x] 2026-06-09 初筛发现 direct speed-head controller 不可用：`C1_speedhead` 在 route 00 起步阶段持续预测 `speed_head_class=0`、`desired_speed=0`、`brake=1`，导致车辆锁死，route 00 得分约 `2.35`
-  - [ ] 暂停 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` direct controller 的 20-route / 220-route；condition-v1 闭环先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` + spatial PID fallback
-  - [ ] 将 speed head 推理改成 gated speed cap / brake gate，而不是低速起步时直接用 class 0 覆盖 desired speed
+  - [x] 2026-06-11 已按 syb 思路修复 speed-head 标量速度转换：默认 `DIFFUSIONDRIVE_SPEED_HEAD_UNCERTAINTY_WEIGHT=1`，仅当 `p(class0) > DIFFUSIONDRIVE_SPEED_HEAD_BRAKE_THRESHOLD`（默认 `0.9`）才强制 `desired_speed=0`，否则用概率期望速度
+  - [ ] 新版 speed-head 先重跑 route 00 / 24 sanity；通过后再跑固定 20-route，不能把旧 `C1_speedhead` 结果当作新版结论
+  - [ ] 如 syb-style direct 仍不稳定，再将 speed head 推理改成 gated speed cap / brake gate，而不是直接覆盖 spatial PID desired speed
   - [ ] 闭环评测优先固定 20-route；只有 fallback 控制下接近或超过 A8/A9/A12 时再跑 220-route
 
 - [x] **Route condition token 推理接入**

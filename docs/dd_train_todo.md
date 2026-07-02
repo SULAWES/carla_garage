@@ -109,7 +109,8 @@
   - [x] 训练入口新增 `--speed-loss-weight`、`target_speed_loss`、`target_speed_accuracy`、`target_speed_brake_accuracy`、`target_speed_l1`
   - [x] 推理侧新增 `DIFFUSIONDRIVE_USE_SPEED_HEAD=1` predicted-speed longitudinal controller，保留当前 spatial PID desired speed 作为 fallback / ablation
   - [x] 记录 `C1_speedhead` direct controller 失败：route 00 起步阶段持续 class 0 / desired speed 0 / brake 1，导致车辆锁死，route 00 得分约 `2.35`，不应继续跑 direct speed-head 20-route / 220-route
-  - [ ] 将 speed head 从直接 desired-speed controller 改为 gated speed cap / brake gate；低速起步且轨迹/route 明确前进时不能允许 class 0 直接全刹
+  - [x] 2026-06-11 已按 syb 思路将 speed-head 推理接法改为 uncertainty-weighted speed conversion：默认只有 `p(class0)>0.9` 才强制 `desired_speed=0`，否则用 `sum(prob * target_speeds)`；`DIFFUSIONDRIVE_SPEED_HEAD_UNCERTAINTY_WEIGHT=0` 保留 argmax 诊断
+  - [ ] 新版 speed-head 先重跑 route 00 / 24 sanity；如果仍有低速锁死，再升级为 spatial PID 主控的 gated speed cap / brake gate
   - [ ] 将 run 命名为 `baseline-condition-v1` 或更具体的 `speedhead_v1_*`，避免和已完成的 `baseline-basic` 混淆
 
 - [x] **两个 condition token 的 route conditioning**
@@ -407,7 +408,7 @@
 ## 建议的推进顺序
 
 1. `baseline-condition-v1` soft-clean + skip-first full retrain 已完成；闭环先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` 的 spatial PID fallback 评估 trajectory + route token。
-2. 暂停 `C1_speedhead` direct controller 路线；该路线已在 20-route 初筛中出现 class-0 全刹锁死，需要先重构 speed-head 推理 gate。
+2. 旧 `C1_speedhead` direct controller 路线已失败；2026-06-11 已接入 syb-style uncertainty-weighted conversion，新版应先重跑 route 00 / 24 sanity，再决定是否跑 20-route。
 3. open-loop all-scenarios 检查 trajectory / speed metrics，尤其是 `target_speed_l1`、brake accuracy 和坏场景 top-k。
 4. 结合 Z0/Z1 结果，优先做 no-LiDAR full retrain，验证模型侧 LiDAR BEV 是否应从 baseline-condition-v1 移除。
 5. 若 no-LiDAR 不稳定，再考虑保留单帧 LiDAR 并补 auxiliary supervision，或做 `regnety_032` full retrain；不要直接 warm-start 当前 ResNet34 checkpoint。
