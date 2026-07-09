@@ -8,7 +8,8 @@
 
 - 这份文档记录的是离线多帧 LiDAR BEV residual alignment / refinement 排查，不等同于当前模型侧 LiDAR 主路径。
 - 当前 DiffusionDrive baseline 使用 `lidar_seq_len=1`，模型不消费更久历史 BEV；v3-v9 refinement 暂不作为下一轮 baseline-condition-v1 的优先修复项。
-- Z0/Z1 20-route zero-LiDAR 诊断显示，置零模型侧 LiDAR BEV 反而更好；该开关不关闭 raw LiDAR safety-box。因此当前更优先的问题是模型侧 LiDAR BEV 是否应保留、如何监督，而不是马上继续扩大多帧 refinement。
+- Z0/Z1 20-route 和 condition-v1 L0 zero-LiDAR 诊断显示，置零模型侧 LiDAR BEV 反而更好；该开关不关闭 raw LiDAR safety-box。因此当前更优先的问题是模型侧 LiDAR BEV 的 train-vs-online contract、通道贡献、fusion 强度和监督方式，而不是马上继续扩大多帧 refinement。
+- 项目最终路线仍应使用 LiDAR；zero/no-LiDAR 只作为诊断上界，不应被写成最终方案。
 - 若后续重启多帧 LiDAR，本文件的 v9 / 近场 `0-8m` 诊断仍然是参考起点。
 
 当前最重要的结论：

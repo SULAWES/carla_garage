@@ -2,14 +2,14 @@
 
 本文档记录基于当前代码状态整理出的 `DiffusionDriveAgent` 后续事项。格式参考旧版 `diffusiondrive_claude.md`，但结论以现在的实现为准。
 
-**更新日期**: 2026-06-07
+**更新日期**: 2026-07-09
 **判断基线**:
 
 - 当前代码状态以 `carla_garage/team_code/diffusiondrive_agent.py` 为准
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
 - 当前模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder；syb 常用的 `regnety_032` 是 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain
-- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；Z0/Z1 20-route 诊断变好说明模型侧 LiDAR BEV 可能是负贡献，不代表 runtime safety-box 应移除
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；Z0/Z1 和 condition-v1 L0 诊断变好说明当前模型侧 LiDAR BEV 接入不稳定，但项目要求使用 LiDAR，因此 zero/no-LiDAR 只作为诊断上界，正式主线应修复 LiDAR contract / fusion / supervision
 - 需要区分两套机制：
 - `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
@@ -60,8 +60,13 @@
   - [x] 新增批量诊断与 contact sheet 输出，便于检查 top scenario 和 worst gain case
   - [x] 明确当前 baseline 不消费更久历史 BEV，v3-v9 residual refinement 不是当前主线瓶颈
   - [x] 明确 zero-LiDAR 只诊断模型侧 BEV LiDAR 分支，不能用于判断 safety-box 是否该关闭
+  - [x] 记录 condition-v1 L0 zero model-LiDAR 诊断：共同 19 条 route 上 `DS=43.58` 高于 C0 common19 的 `39.07`，但 route completion 降低且 route deviation 从 `0` 增至 `6`，说明 LiDAR 问题不能简单归结为“移除 LiDAR”
+  - [ ] 增加在线 LiDAR BEV dump / 统计：记录 `point_count`、nonzero ratio、channel mean/max、saturation ratio、front/back/left/right occupancy，用于对比 B2D `.laz` histogram 与 online half-scan concat histogram
+  - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
+  - [ ] 评估 LiDAR fusion gate / dropout：保留 LiDAR 输入，但降低未校准 BEV 分支对 image feature 的早期污染
+  - [ ] 若继续出现负贡献，优先补 `bev_semantic_map`、`agent_states`、`agent_labels` 等辅助监督，而不是把 zero-LiDAR 当正式方案
   - [ ] 人工检查 `lidar_bev_v9_batch_100_1` 的 contact sheet，确认近场 `0-8m` raw IoU 退化主要来自动态目标、遮挡还是 scorer 偏置
-  - [ ] 当前优先级低于 no-LiDAR / single-frame LiDAR retrain ablation；若后续重启多帧 BEV，再考虑下一版 scorer 加入近场 `0-8m` raw/dynamic 一致性约束并用 batch_100 对比 v5/v9
+  - [ ] 当前优先级高于 no-LiDAR final 方案；no-LiDAR / zero-LiDAR 只能作为诊断对照，若后续重启多帧 BEV，再考虑下一版 scorer 加入近场 `0-8m` raw/dynamic 一致性约束并用 batch_100 对比 v5/v9
   - [ ] 低优先级：如果后续仍怀疑 pose 语义，再基于真实 route log 对比当前共享变换公式与标准 SE(2)，不要作为当前主线
 
 - [ ] **Config 体系收敛**
@@ -376,8 +381,8 @@
 
 注意：早期命名为 `A5_stuck120` / `A6_stuck170` / `A7_stuck300` 的 20-route ablation 是在 `DIFFUSIONDRIVE_STUCK_THRESHOLD` 尚未被代码读取时跑出的，不能解释为 stuck threshold 对比，只能作为重复运行 / 随机性参考。后续 `_real` 后缀重跑已经有效：`A5_stuck120_real` / `A6_stuck170_real` / `A7_stuck300_real` 表明单独调 stuck threshold 不是主要突破口，`A8_pid_6_2p5` 和 `A9_pid_7_3` 的空间 PID 速度参数收益更明显。
 3. A10/A11/A12 和 S1/S2 后，纯 PID / camera geometry 小实验的边际收益已下降；后续闭环预算优先留给重训后的少数候选，而不是继续做密集 PID 插值。
-4. 结合 Z0/Z1 结果，下一步模型侧 LiDAR 优先做 no-LiDAR full retrain；如果 no-LiDAR 确认更稳，再决定是否保留 raw LiDAR safety-box 并移除模型 BEV LiDAR 分支。
-5. 若继续使用模型侧 LiDAR，再考虑 `regnety_032` full retrain 或补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision；不要只把当前 ResNet34 checkpoint warm-start 到 RegNet。
+4. 结合 Z0/Z1 和 condition-v1 L0 结果，下一步模型侧 LiDAR 优先做 BEV contract 统计 / dump、channel ablation、fusion gate / dropout 和 auxiliary supervision；zero/no-LiDAR 只作为诊断上界，不作为最终主线。
+5. 若后续切换到 `regnety_032`，应作为 full retrain ablation；不要只把当前 ResNet34 checkpoint warm-start 到 RegNet。
 6. 将 stop sign controller 从 privileged actor-based ablation 迁移到 sensor-only 的 bbox / route-aware 方案，或在论文中仅作为 privileged ablation 单列。
 7. 再考虑闭环导向数据增强、持续学习方法、route-aware guard / blend 或更复杂的控制头。
 

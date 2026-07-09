@@ -543,6 +543,35 @@ Z1_A9_pid_7_3_zero_lidar_safety_debug:
 
 与对应对照相比，Z0/Z1 没有关闭 safety-box，却减少了 forced creep / blocked 并提升 DS。这说明当前模型侧 LiDAR BEV 更像 domain-gap 噪声或未充分监督的负贡献。正式结论仍需在重训模型上验证；不要把 runtime zero-LiDAR ablation 直接当作论文 baseline。
 
+2026-07-09 已补充 `baseline-condition-v1` 上的 LiDAR 诊断：
+
+```text
+L0_CV1_A8_zero_model_lidar_fallback:
+  setting: condition-v1 checkpoint, route token on, speed-head off,
+           A8 spatial PID, DIFFUSIONDRIVE_ZERO_LIDAR=1
+  valid routes: 19/20
+  missing route: 50, SensorReceivedNoData, infrastructure/sensor timeout
+  DS=43.58, RC=82.10, infraction_penalty=0.509, NDS=30.27
+  status=8 completed / 6 route-deviated / 5 blocked
+  stuck_logs=2712, safety_box_stop_logs=10845
+```
+
+与 `C0_A8_pid_6_2p5_fallback` 在共同 19 条 route 上对比：
+
+```text
+C0 common19: DS=39.07, RC=86.31, infraction_penalty=0.433
+              status=13 completed / 6 blocked
+L0 common19: DS=43.58, RC=82.10, infraction_penalty=0.509
+              status=8 completed / 6 route-deviated / 5 blocked
+```
+
+解释边界：
+
+- L0 进一步支持“当前模型侧 BEV LiDAR 分支不稳定”：zero model-LiDAR 后 `DS / infraction_penalty / avg speed` 提升，`stuck` 和 `safety_box_stop` 日志减少。
+- 但 L0 不是“最终应该不用 LiDAR”的证据。它同时降低了 route completion，并把一部分 blocked failure 变成 route deviation。
+- 因为项目要求使用 LiDAR，后续主线应从“去掉 LiDAR”调整为“修复 LiDAR 接入”：把 no-LiDAR / zero-LiDAR 只作为诊断上界和归因工具。
+- 当前更准确的结论是：LiDAR 传感器本身仍然需要保留；问题集中在模型侧 `lidar_feature` 的传感器合同、BEV 表示、fusion 强度和监督方式。
+
 ### 什么时候它会变成高优先级
 
 LiDAR / safety-box 应在以下情况升为主线问题：
@@ -582,11 +611,44 @@ LiDAR / safety-box 应在以下情况升为主线问题：
 
    目的不是作为正式结果，而是判断当前 LiDAR BEV 对闭环是正贡献、弱贡献，还是存在 domain gap 噪声。
 
+4. 增加 LiDAR BEV contract dump。对在线推理前的 `lidar_bev` 和离线 B2D `.laz` 经同一 histogram 后的 BEV 统计：
+
+   ```text
+   point_count
+   nonzero_ratio
+   max / mean / saturation ratio
+   front/back/left/right occupancy
+   below/above channel ratio
+   ```
+
+   目标是确认训练侧 `.laz -> histogram` 和闭环侧 `half-scan concat -> histogram` 是否同分布。
+
+5. 做 channel ablation，而不是只做 whole-LiDAR ablation：
+
+   ```text
+   keep obstacle / above-split channel only
+   keep ground / below-split channel only
+   zero all LiDAR channels
+   original LiDAR
+   ```
+
+   如果某个通道单独有害，优先修该通道的 contract / normalization，而不是整体否定 LiDAR。
+
+6. 训练侧修复方向优先考虑：
+
+   ```text
+   LiDAR dropout
+   learnable LiDAR fusion gate, initialized conservatively
+   BEV semantic / agent state / agent label auxiliary supervision
+   train-vs-online LiDAR pose and density alignment
+   ```
+
 ### 暂不建议
 
 - 暂不建议直接重启下一版 residual refinement。
 - 暂不建议在当前 baseline 中启用 `lidar_seq_len > 1`。
 - 暂不建议只把当前模型从 `resnet34` 改成 `regnety_032` 后 warm-start。backbone 结构变化会造成大量权重不兼容，应视作新的 full retrain ablation。
+- 暂不建议把 no-LiDAR full retrain 作为项目主线最终方案；它最多用于确认当前 LiDAR 分支的负贡献上界。正式路线仍应保留并修复 LiDAR。
 - 只有当后续决定重训多帧 LiDAR 模型时，v9 及其后续 refinement 才重新成为主线问题。
 - 如果要重启多帧 LiDAR，应先明确目标是“模型输入多帧历史 BEV”还是“仅 safety-box runtime 更稳”。前者需要训练接口和 checkpoint 全部变化，后者更像工程诊断和规则修正。
 
@@ -718,7 +780,7 @@ notes:
 1. `baseline-condition-v1` soft-clean + skip-first full retrain 已完成，先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` 的 spatial PID fallback 跑固定 20-route，隔离 trajectory + route token 的闭环效果。
 2. 旧 `C1_speedhead` direct longitudinal controller 已失败；2026-06-11 已按 syb 思路改为 uncertainty-weighted speed conversion，下一步可用新实验名先跑 route 00 / 24 sanity，再决定是否跑 20-route。
 3. open-loop all-scenarios 结果显示 condition-v1 轨迹误差略弱于 baseline-basic，但部分 left-turn / noScenarios / MergerIntoSlowTraffic 有改善；闭环结论仍需看 C0/C2 fallback 和新版 speed-head sanity。
-4. 对 LiDAR 分支做少量结构性 retrain ablation，而不是继续只跑 runtime 开关：优先 `no-lidar retrain`；其次才是 `regnety_032 lidar/image encoder retrain` 或补 BEV / agent auxiliary supervision。
+4. 对 LiDAR 分支做少量结构性修复实验，而不是继续只跑 runtime 开关：优先验证 train-vs-online LiDAR BEV contract、做 channel ablation 和 LiDAR fusion gate / dropout；`no-lidar retrain` 只作为诊断上界，正式主线仍应保留 LiDAR 并补 BEV / agent auxiliary supervision。
 5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12/Z1，再跑 220-route。
 6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
 7. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。

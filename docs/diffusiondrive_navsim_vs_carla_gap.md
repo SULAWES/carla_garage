@@ -154,7 +154,7 @@
 
 ### 建议
 - 在 CARLA 上重新训练时，**第一阶段建议只保留 trajectory loss**，关闭 BEV semantic 和 agent detection，以降低复杂度。
-- 若后续继续保留模型侧 LiDAR，优先考虑两个方向：先做 no-LiDAR full retrain 得到干净对照；再决定是否接入 BEV / agent auxiliary supervision 或 syb-style `regnety_032` backbone。
+- 若后续继续保留模型侧 LiDAR，优先考虑三个方向：先验证 train-vs-online LiDAR BEV contract，做 above/below channel ablation 和 fusion gate / dropout；再接入 BEV / agent auxiliary supervision；最后再评估 syb-style `regnety_032` backbone。zero/no-LiDAR 只作为诊断对照和上界，不作为最终主线。
 
 ---
 

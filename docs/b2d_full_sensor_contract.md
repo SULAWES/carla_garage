@@ -68,7 +68,7 @@ B2D Full 原生格式：
 - 模型侧 LiDAR：BEV histogram 作为 `lidar_feature` 输入 DiffusionDrive backbone。
 - runtime LiDAR：raw / buffered LiDAR 用于 safety-box、stuck / creep 等规则逻辑。
 
-`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 runtime safety-box raw LiDAR。因此 zero-LiDAR 诊断变好时，优先说明模型侧 BEV LiDAR 分支存在 domain gap / 监督不足风险，不能直接推出 safety-box 应该关闭。
+`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 runtime safety-box raw LiDAR。因此 zero-LiDAR 诊断变好时，优先说明模型侧 BEV LiDAR 分支存在 train-vs-online contract gap、fusion 噪声或监督不足风险，不能直接推出 safety-box 应该关闭。项目最终路线仍应使用 LiDAR；zero/no-LiDAR 只作为诊断上界和归因工具。
 
 ## 已知 Gap
 

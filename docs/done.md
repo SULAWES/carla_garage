@@ -55,7 +55,7 @@
 - 已添加 `tools/make_lidar_bev_contact_sheet.py`，用于生成 top scenario 和 worst gain 的 HTML contact sheet。
 - 已生成 `lidar_bev_v9_batch_100` 与 `lidar_bev_v9_batch_100_1` 的 summary 和 contact sheet。
 - 已用 residual 统计排除明显全局固定 `dx/dy` 偏移，当前不优先按外参或坐标系常量偏差修复。
-- 已明确当前 DiffusionDrive 模型侧 LiDAR 仍是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder，不是 syb 的 `regnety_032`；切换 backbone 或 no-LiDAR 都应作为 full retrain ablation。
+- 已明确当前 DiffusionDrive 模型侧 LiDAR 仍是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder，不是 syb 的 `regnety_032`；切换 backbone 应作为 full retrain ablation，zero/no-LiDAR 仅作为诊断上界。
 
 ## 当前结论
 
@@ -63,4 +63,4 @@
 - 现有证据不支持把问题主因判断为全局外参偏移或固定坐标系偏差。
 - v9 是更保守、更适合诊断的版本，但还不是最终替代方案。
 - 旧 v3-v9 多帧 BEV residual refinement 不是当前 baseline 主线，因为 `lidar_seq_len=1`，模型不消费更久历史 BEV。
-- 下一步 LiDAR 方向优先做 no-LiDAR full retrain；若保留 LiDAR，再考虑 `regnety_032` full retrain 或补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision。近场 `0-8m` raw/dynamic 一致性约束保留为后续重启多帧 BEV refinement 时的诊断项。
+- 下一步 LiDAR 方向优先修复模型侧 BEV 接入：先做 train-vs-online LiDAR BEV contract 统计 / dump、channel ablation，再考虑 fusion gate / dropout、`agent_states / agent_labels / bev_semantic_map` auxiliary supervision 或 `regnety_032` full retrain。近场 `0-8m` raw/dynamic 一致性约束保留为后续重启多帧 BEV refinement 时的诊断项。

@@ -209,7 +209,7 @@ stuck recovery 也支持闭环 A/B 覆盖：`DIFFUSIONDRIVE_STUCK_THRESHOLD` 控
 
 creep 本身不是 Bench2Drive leaderboard 的独立指标。日志中 `Detected agent being stuck` 表示 forced creep 正在给最小 throttle；`Creeping stopped by safety box` 表示 creep 已触发但前方 LiDAR safety box 非空，因此被 emergency stop 拦下。分析闭环时需要把这两类日志和 `MinSpeedTest`、`AgentBlockedTest`、timeout 一起看。
 
-推理侧还支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，在模型输入处把 LiDAR BEV 置零。这个开关只诊断模型侧 BEV LiDAR 分支，不会关闭 raw LiDAR safety-box、stuck / creep 或 emergency stop 逻辑。本地 Z0/Z1 20-route 结果显示 zero model-LiDAR 反而更好，说明当前模型侧 LiDAR BEV 可能是 domain-gap 噪声或监督不足；正式 baseline 仍应通过 no-LiDAR full retrain 验证，不应把 runtime zero-LiDAR ablation 直接作为主结果。
+推理侧还支持 `DIFFUSIONDRIVE_ZERO_LIDAR=1`，在模型输入处把 LiDAR BEV 置零。这个开关只诊断模型侧 BEV LiDAR 分支，不会关闭 raw LiDAR safety-box、stuck / creep 或 emergency stop 逻辑。本地 Z0/Z1 20-route 和 condition-v1 L0 结果显示 zero model-LiDAR 反而更好，说明当前模型侧 LiDAR BEV 可能存在 train-vs-online contract gap、fusion 噪声或监督不足；项目最终路线仍应使用 LiDAR，因此不应把 runtime zero-LiDAR ablation 直接作为主结果。
 
 也就是说，这个 agent 当前不是“直接输出控制量”，而是“输出轨迹，再用经典控制器执行”。
 

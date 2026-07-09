@@ -2,7 +2,7 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-06-07
+**更新日期**: 2026-07-09
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
@@ -10,7 +10,7 @@
 - full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - baseline-basic 开环 / 闭环结果已完成并下载到本地 `dd_logs` 镜像路径；open-loop six-scene `l1_mean=0.0092`，all-scenarios `l1_mean=0.0192`，Bench2Drive 220 closed-loop `DS=44.81`、`RC=79.48`、`NDS=35.52`
 - baseline-basic 已完成一组 20-route 闭环 A/B；当前最明显正向方向是空间 PID 速度参数，`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` DS/NDS 最高但 collision / timeout 风险更高
-- 20-route Z0/Z1 zero-LiDAR 诊断显示模型侧 LiDAR BEV 可能是负贡献：zero-LiDAR 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；因此下一步 LiDAR 方向应优先做 no-LiDAR full retrain 或补 LiDAR auxiliary supervision，而不是直接重启多帧 BEV refinement
+- 20-route Z0/Z1 以及 condition-v1 L0 zero-LiDAR 诊断显示当前模型侧 LiDAR BEV 接入不稳定：zero-LiDAR 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；项目要求使用 LiDAR，因此 no-LiDAR / zero-LiDAR 只能作为诊断上界，下一步 LiDAR 方向应优先验证 train-vs-online LiDAR BEV contract、做 channel ablation，并补 LiDAR fusion gate / dropout 与 auxiliary supervision
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -134,10 +134,15 @@
   - [x] 明确当前 CARLA DiffusionDrive 模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + CNN encoder，默认 `DiffusionDriveConfig.lidar_architecture="resnet34"`，不是 syb 的 `regnety_032`
   - [x] 明确 `regnety_032` 是 `timm` 2D CNN backbone 名称，不是 LiDAR 专用表示；切换它需要 full retrain，不能用当前 ResNet34 checkpoint warm-start 得到正式结论
   - [x] 记录 zero-LiDAR 诊断边界：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 safety-box raw LiDAR
-  - [ ] 优先做 no-LiDAR full retrain，验证当前模型侧 LiDAR BEV 是否确实是负贡献
-  - [ ] 如继续使用 LiDAR，再评估 `regnety_032` full retrain 或 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision
+  - [x] 记录 condition-v1 L0 诊断：共同 19 条 route 上 zero model-LiDAR `DS=43.58 / RC=82.10 / IP=0.509`，相对 C0 common19 的 `DS=39.07 / RC=86.31 / IP=0.433` 提升 DS/IP 但降低 RC，并新增 6 条 route deviation
+  - [ ] 把 no-LiDAR / zero-LiDAR 定位为诊断上界，而不是正式主线；项目最终路线仍应使用 LiDAR
+  - [ ] 优先实现 LiDAR BEV contract 统计 / dump，对比 B2D `.laz -> histogram` 与 online `half-scan concat -> histogram` 的点数、非零率、通道均值 / 饱和率和左右前后 occupancy
+  - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
+  - [ ] 评估 LiDAR fusion gate / dropout full retrain：保留 LiDAR 输入，但避免未校准 LiDAR BEV 在 backbone early fusion 中污染视觉特征
+  - [ ] 补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision，让 LiDAR 分支学习可解释的近场几何 / 动态体语义，而不是只靠 trajectory loss 间接学习
+  - [ ] 如继续对齐 syb，再评估 `regnety_032` full retrain；不要只把当前 ResNet34 checkpoint warm-start 到 RegNet
   - [ ] 验证 raw Bench2Drive LiDAR `x=-0.39,z=1.84,yaw=0,range=85` 与 garage 在线 LiDAR `x=0,z=2.5,yaw=-90` 的训练/推理 gap
-  - [ ] 暂不把多帧 LiDAR 作为当前主线；只有 no-LiDAR / 单帧 LiDAR 结论明确后，再决定是否启用 `lidar_seq_len>1`
+  - [ ] 暂不把多帧 LiDAR 作为当前主线；只有单帧 LiDAR 的 contract / channel / fusion 结论明确后，再决定是否启用 `lidar_seq_len>1`
   - [ ] 明确 histogram 参数是否沿用当前 garage 设置
   - [ ] 验证时序 realign 对训练标签的一致性
 
@@ -210,7 +215,7 @@
 - stuck detection
 - safety box
 
-这为后续训练后如何做闭环调参提供了直接参考。多帧 LiDAR 目前不再是默认下一步，应先完成 no-LiDAR / 单帧 BEV LiDAR 的 clean retrain 对照。
+这为后续训练后如何做闭环调参提供了直接参考。多帧 LiDAR 目前不再是默认下一步；应先确认单帧 BEV LiDAR 在训练 / 推理之间的 contract 是否一致，并用 zero/no-LiDAR 作为诊断对照，而不是把移除 LiDAR 当最终路线。
 
 #### 3. 新聚类 anchor 已提取并接入当前链路
 
@@ -329,10 +334,10 @@
 
 1. 单前视 vs 多相机
 2. 当前 resize / crop 方案 vs 备选方案
-3. no-LiDAR full retrain vs 当前单帧 BEV LiDAR
+3. LiDAR BEV contract / channel ablation / fusion gate vs 当前单帧 BEV LiDAR
 4. 是否保留 JPEG artifact
 
-多帧 LiDAR 暂不作为当前优先消融。Z0/Z1 已经说明模型侧 BEV LiDAR 可能是负贡献；在确认 no-LiDAR / 单帧 LiDAR 的 clean retrain 结论前，直接增加历史帧会让归因更复杂。
+多帧 LiDAR 暂不作为当前优先消融。Z0/Z1 和 condition-v1 L0 说明模型侧 BEV LiDAR 接入不稳定；在确认单帧 LiDAR 的 train-vs-online BEV contract、通道贡献和 fusion 强度前，直接增加历史帧会让归因更复杂。
 
 ### 5. 轨迹表示需要在训练前统一
 
@@ -410,8 +415,8 @@
 1. `baseline-condition-v1` soft-clean + skip-first full retrain 已完成；闭环先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` 的 spatial PID fallback 评估 trajectory + route token。
 2. 旧 `C1_speedhead` direct controller 路线已失败；2026-06-11 已接入 syb-style uncertainty-weighted conversion，新版应先重跑 route 00 / 24 sanity，再决定是否跑 20-route。
 3. open-loop all-scenarios 检查 trajectory / speed metrics，尤其是 `target_speed_l1`、brake accuracy 和坏场景 top-k。
-4. 结合 Z0/Z1 结果，优先做 no-LiDAR full retrain，验证模型侧 LiDAR BEV 是否应从 baseline-condition-v1 移除。
-5. 若 no-LiDAR 不稳定，再考虑保留单帧 LiDAR 并补 auxiliary supervision，或做 `regnety_032` full retrain；不要直接 warm-start 当前 ResNet34 checkpoint。
+4. 结合 Z0/Z1 和 condition-v1 L0 结果，优先修复 LiDAR 接入：先做 LiDAR BEV contract 统计 / dump、channel ablation，再评估 fusion gate / dropout 和 auxiliary supervision。
+5. no-LiDAR / zero-LiDAR 只作为诊断上界；项目最终路线仍应保留 LiDAR。若要换 `regnety_032`，必须作为 full retrain ablation，不要直接 warm-start 当前 ResNet34 checkpoint。
 6. 训练后只把少数候选放到固定 20-route 闭环，接近或超过 A8/A9/A12/Z1 后再跑 220-route。
 7. 闭环阶段继续记录 `safety_box_*`、stuck / creep 和 route deviation debug，但不再密集扫 PID 插值。
 8. 最后再考虑持续学习、route-aware guard / blend、sensor-only stop sign 和更复杂控制头。

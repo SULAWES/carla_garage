@@ -441,4 +441,36 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 - `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 raw LiDAR safety-box。
 - 因此 Z0/Z1 更好，优先说明当前模型侧 LiDAR BEV 分支可能是 domain-gap 噪声或监督不足，而不是说明 safety-box 应该关闭。
 - 当前 DiffusionDrive LiDAR backbone 是 NAVSIM-style `resnet34` BEV encoder，不是 syb 的 `regnety_032`。若要对齐 syb，应作为 full retrain ablation。
-- 下一步 LiDAR 主线优先级：先做 no-LiDAR full retrain；若保留 LiDAR，再考虑 `regnety_032` full retrain 或补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision。
+- 项目要求使用 LiDAR，因此 zero-LiDAR / no-LiDAR 只能作为诊断和上界，不应作为最终主线。下一步 LiDAR 主线优先级应调整为：先验证训练 / 推理 LiDAR BEV contract，再做 channel ablation、LiDAR fusion gate / dropout，以及 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision。
+
+### Condition-v1 LiDAR diagnostic
+
+2026-07-09 已拉取 `baseline-condition-v1` 上的 L0 诊断结果：
+
+```text
+/home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_condition_v1/ablation_20routes_lidar/
+  L0_CV1_A8_zero_model_lidar_fallback/
+```
+
+运行条件：
+
+- checkpoint：`full_baseline_condition_v1/soft_clean_skip25_imgnet_ddp4_bs64x4_lr6e-4_ep100/latest.pth`
+- route token：on
+- speed-head longitudinal controller：off
+- PID：A8 spatial PID，`speed_fast=6.0`、`speed_slow=2.5`
+- LiDAR：`DIFFUSIONDRIVE_ZERO_LIDAR=1`，只置零模型侧 BEV LiDAR，不关闭 raw LiDAR safety-box
+
+聚合结果：
+
+| Experiment | Valid routes | DS | RC | Infraction penalty | NDS | Completed | Deviated | Blocked | Stuck logs | Safety-box stop logs |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `C0_A8_pid_6_2p5_fallback` common19 | 19 | 39.0702 | 86.3089 | 0.4334 | n/a | 13 | 0 | 6 | n/a | n/a |
+| `L0_CV1_A8_zero_model_lidar_fallback` | 19 | 43.5831 | 82.1032 | 0.5095 | 30.2713 | 8 | 6 | 5 | 2712 | 10845 |
+
+完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_attempt2_eval.log` 显示 `SensorReceivedNoData: A sensor took too long to send their data`，应视为基础设施 / 传感器超时，不能计入模型成绩。
+
+结论：
+
+- L0 延续了 Z0/Z1 的方向：zero model-LiDAR 后低速 / stuck / safety-box stop 有缓和，`DS` 和 infraction penalty 改善。
+- 但 L0 也引入了明显 route deviation：共同 19 条 route 中从 C0 的 `0` 条 route-deviated 变为 L0 的 `6` 条。
+- 因此当前不能得出“最终移除 LiDAR”的结论；更合理的判断是当前模型侧 LiDAR BEV 接入不稳定，LiDAR contract / channel / fusion / auxiliary supervision 需要作为主线修复。

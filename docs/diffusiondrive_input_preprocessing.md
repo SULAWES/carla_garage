@@ -86,7 +86,7 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征；默�
 - 多帧 buffer
 - 历史帧 realign
 
-这部分当前是工程适配，不应简单按 NAVSIM 单帧路径回退。但需要区分模型侧 LiDAR 和 runtime LiDAR：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型输入的 BEV feature，不关闭 raw LiDAR safety-box。Z0/Z1 20-route 诊断更好，说明当前模型侧 BEV LiDAR 可能是负贡献；正式处理应优先做 no-LiDAR full retrain 或补 LiDAR auxiliary supervision，而不是直接关闭 safety-box。
+这部分当前是工程适配，不应简单按 NAVSIM 单帧路径回退。但需要区分模型侧 LiDAR 和 runtime LiDAR：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型输入的 BEV feature，不关闭 raw LiDAR safety-box。Z0/Z1 以及 condition-v1 L0 诊断更好，说明当前模型侧 BEV LiDAR 接入不稳定；但项目最终路线仍要求使用 LiDAR，因此 no-LiDAR / zero-LiDAR 只能作为诊断上界。正式处理应优先验证训练 / 推理 LiDAR BEV contract、做 channel ablation、LiDAR fusion gate / dropout 和 LiDAR auxiliary supervision，而不是直接关闭 safety-box 或把 no-LiDAR 当最终方案。
 
 ## 当前结论
 
@@ -118,7 +118,7 @@ NAVSIM 原版只使用最新单帧 LiDAR，并直接用 histogram 特征；默�
 5. 如果后续要做性能消融，可以在冻结主线之外比较：
    - `DIFFUSIONDRIVE_JPEG_ARTIFACT=1/0`
    - `DIFFUSIONDRIVE_IMAGE_NORMALIZATION=none/imagenet`
-   - no-LiDAR full retrain vs 当前单帧 BEV LiDAR
+   - LiDAR BEV contract / channel ablation / fusion gate vs 当前单帧 BEV LiDAR
    - 单前视 vs 多相机
 
 6. 多相机拼接不是简单预处理开关，需要同时改 leaderboard 传感器注册、图像拼接、训练数据采集和 checkpoint 兼容策略，应作为单独决策项处理。
