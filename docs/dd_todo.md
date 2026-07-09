@@ -9,7 +9,7 @@
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
 - 当前模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder；syb 常用的 `regnety_032` 是 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain
-- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；Z0/Z1 和 condition-v1 L0 诊断变好说明当前模型侧 LiDAR BEV 接入不稳定，但项目要求使用 LiDAR，因此 zero/no-LiDAR 只作为诊断上界，正式主线应修复 LiDAR contract / fusion / supervision
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；Z0/Z1 和 condition-v1 L0/L1 诊断变好说明当前模型侧 LiDAR BEV 接入不稳定。L1 `DS=50.77/RC=88.97/NDS=34.95` 是目前 condition-v1 最强 20-route 候选，但同时改了 A9 PID 和 zero model-LiDAR，因此还需补 `condition-v1 + A9 PID + LiDAR ON` 对照。项目要求使用 LiDAR，zero/no-LiDAR 只作为诊断上界，正式主线应修复 LiDAR contract / fusion / supervision
 - 需要区分两套机制：
 - `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
@@ -61,6 +61,8 @@
   - [x] 明确当前 baseline 不消费更久历史 BEV，v3-v9 residual refinement 不是当前主线瓶颈
   - [x] 明确 zero-LiDAR 只诊断模型侧 BEV LiDAR 分支，不能用于判断 safety-box 是否该关闭
   - [x] 记录 condition-v1 L0 zero model-LiDAR 诊断：共同 19 条 route 上 `DS=43.58` 高于 C0 common19 的 `39.07`，但 route completion 降低且 route deviation 从 `0` 增至 `6`，说明 LiDAR 问题不能简单归结为“移除 LiDAR”
+  - [x] 记录 condition-v1 L1 zero model-LiDAR 诊断：A9 PID full20 `DS=50.77 / RC=88.97 / NDS=34.95`，当前最强 condition-v1 候选，但需要 A9 LiDAR-on 对照拆分收益来源
+  - [ ] 补 `condition-v1 + A9 PID + LiDAR ON` 固定 20-route 对照，和 L1 只差 `DIFFUSIONDRIVE_ZERO_LIDAR`
   - [ ] 增加在线 LiDAR BEV dump / 统计：记录 `point_count`、nonzero ratio、channel mean/max、saturation ratio、front/back/left/right occupancy，用于对比 B2D `.laz` histogram 与 online half-scan concat histogram
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
   - [ ] 评估 LiDAR fusion gate / dropout：保留 LiDAR 输入，但降低未校准 BEV 分支对 image feature 的早期污染

@@ -565,10 +565,41 @@ L0 common19: DS=43.58, RC=82.10, infraction_penalty=0.509
               status=8 completed / 6 route-deviated / 5 blocked
 ```
 
+随后补跑了 A9 PID 版本：
+
+```text
+L1_CV1_A9_zero_model_lidar_fallback:
+  setting: condition-v1 checkpoint, route token on, speed-head off,
+           A9 spatial PID, DIFFUSIONDRIVE_ZERO_LIDAR=1
+  valid routes: 20/20
+  DS=50.77, RC=88.97, infraction_penalty=0.544, NDS=34.95
+  avg_speed=5.63 km/h
+  status=12 completed / 5 route-deviated / 3 blocked
+  stuck_logs=783, safety_box_stop_logs=8132
+```
+
+与 `C0_A8_pid_6_2p5_fallback` 直接对比：
+
+```text
+C0_A8 lidar-on:   DS=41.84, RC=86.99, NDS=27.47, IP=0.459
+                  status=14 completed / 0 route-deviated / 6 blocked
+L1_A9 zero-lidar: DS=50.77, RC=88.97, NDS=34.95, IP=0.544
+                  status=12 completed / 5 route-deviated / 3 blocked
+```
+
+L1 相比 L0 在共同 19 条 route 上也更强：
+
+```text
+L0_A8 zero-lidar common19: DS=43.58, RC=82.10, IP=0.509
+L1_A9 zero-lidar common19: DS=48.51, RC=88.38, IP=0.524
+```
+
 解释边界：
 
-- L0 进一步支持“当前模型侧 BEV LiDAR 分支不稳定”：zero model-LiDAR 后 `DS / infraction_penalty / avg speed` 提升，`stuck` 和 `safety_box_stop` 日志减少。
-- 但 L0 不是“最终应该不用 LiDAR”的证据。它同时降低了 route completion，并把一部分 blocked failure 变成 route deviation。
+- L0 / L1 进一步支持“当前模型侧 BEV LiDAR 分支不稳定”：zero model-LiDAR 后 `DS / infraction_penalty / avg speed` 提升，`stuck` 和 `safety_box_stop` 日志减少。
+- L1 是当前 condition-v1 里最强的 20-route closed-loop 候选，但它同时改变了两件事：A8 -> A9 PID，以及 lidar-on -> zero model-LiDAR。因此还不能把全部收益归因给 LiDAR。
+- 下一步需要补 `condition-v1 + A9 PID + LiDAR ON`，即 `C2_A9_pid_7_3_fallback` 或等价命名。若 C2 明显低于 L1，模型侧 BEV LiDAR 负贡献才更实锤；若 C2 接近 L1，则主要收益可能来自 A9 PID。
+- L0/L1 不是“最终应该不用 LiDAR”的证据。zero model-LiDAR 仍会带来 route deviation 风险，并且项目要求最终使用 LiDAR。
 - 因为项目要求使用 LiDAR，后续主线应从“去掉 LiDAR”调整为“修复 LiDAR 接入”：把 no-LiDAR / zero-LiDAR 只作为诊断上界和归因工具。
 - 当前更准确的结论是：LiDAR 传感器本身仍然需要保留；问题集中在模型侧 `lidar_feature` 的传感器合同、BEV 表示、fusion 强度和监督方式。
 

@@ -445,11 +445,12 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 
 ### Condition-v1 LiDAR diagnostic
 
-2026-07-09 已拉取 `baseline-condition-v1` 上的 L0 诊断结果：
+2026-07-09 已拉取 `baseline-condition-v1` 上的 L0 / L1 诊断结果：
 
 ```text
 /home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_condition_v1/ablation_20routes_lidar/
   L0_CV1_A8_zero_model_lidar_fallback/
+  L1_CV1_A9_zero_model_lidar_fallback/
 ```
 
 运行条件：
@@ -457,7 +458,7 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 - checkpoint：`full_baseline_condition_v1/soft_clean_skip25_imgnet_ddp4_bs64x4_lr6e-4_ep100/latest.pth`
 - route token：on
 - speed-head longitudinal controller：off
-- PID：A8 spatial PID，`speed_fast=6.0`、`speed_slow=2.5`
+- PID：L0 使用 A8 spatial PID，`speed_fast=6.0`、`speed_slow=2.5`；L1 使用 A9 spatial PID，`speed_fast=7.0`、`speed_slow=3.0`
 - LiDAR：`DIFFUSIONDRIVE_ZERO_LIDAR=1`，只置零模型侧 BEV LiDAR，不关闭 raw LiDAR safety-box
 
 聚合结果：
@@ -466,11 +467,15 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `C0_A8_pid_6_2p5_fallback` common19 | 19 | 39.0702 | 86.3089 | 0.4334 | n/a | 13 | 0 | 6 | n/a | n/a |
 | `L0_CV1_A8_zero_model_lidar_fallback` | 19 | 43.5831 | 82.1032 | 0.5095 | 30.2713 | 8 | 6 | 5 | 2712 | 10845 |
+| `L1_CV1_A9_zero_model_lidar_fallback` common19 | 19 | 48.5136 | 88.3847 | 0.5239 | n/a | 11 | 5 | 3 | n/a | n/a |
+| `L1_CV1_A9_zero_model_lidar_fallback` full20 | 20 | 50.7682 | 88.9655 | 0.5445 | 34.9458 | 12 | 5 | 3 | 783 | 8132 |
 
-完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_attempt2_eval.log` 显示 `SensorReceivedNoData: A sensor took too long to send their data`，应视为基础设施 / 传感器超时，不能计入模型成绩。
+L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_attempt2_eval.log` 显示 `SensorReceivedNoData: A sensor took too long to send their data`，应视为基础设施 / 传感器超时，不能计入模型成绩。L1 已有 20/20 有效 route。
 
 结论：
 
 - L0 延续了 Z0/Z1 的方向：zero model-LiDAR 后低速 / stuck / safety-box stop 有缓和，`DS` 和 infraction penalty 改善。
 - 但 L0 也引入了明显 route deviation：共同 19 条 route 中从 C0 的 `0` 条 route-deviated 变为 L0 的 `6` 条。
+- L1 是目前 condition-v1 下最强的 20-route closed-loop 候选：相对 C0 full20，`DS +8.93`、`RC +1.97`、`NDS +7.48`，blocked 从 `6` 降到 `3`，stuck 从 `3158` 降到 `783`，safety-box stop 从 `12179` 降到 `8132`。代价是 route deviation 从 `0` 增到 `5`。
+- L1 同时改变了 PID 和模型侧 LiDAR 输入，因此不是纯 LiDAR ablation。下一步需要补 `condition-v1 + A9 PID + LiDAR ON`（`C2_A9_pid_7_3_fallback` 或等价命名），用于拆分 A9 PID 收益与 zero model-LiDAR 收益。
 - 因此当前不能得出“最终移除 LiDAR”的结论；更合理的判断是当前模型侧 LiDAR BEV 接入不稳定，LiDAR contract / channel / fusion / auxiliary supervision 需要作为主线修复。

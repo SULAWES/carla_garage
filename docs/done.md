@@ -15,7 +15,7 @@
 - 已完成 full baseline-basic 训练：4 卡 L40 / DDP、B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU batch 64、`lr=6e-4`、`image_encoder_lr_mult=0.5`。
 - 已完成 baseline-basic full-scenario open-loop 汇总和 Bench2Drive 220 sensor-only closed-loop 汇总，并下载到本地 `dd_logs` 镜像路径。
 - 已完成 baseline-basic 20-route 闭环 A/B 初筛，并将结果同步到 `dd_logs/eval_summaries/baseline_basic_ablation_20routes_summary.csv` 与 `baseline_basic_ablation_20routes_creep_summary.csv`。
-- 已完成 20-route sensor / LiDAR 诊断补充：Z0/Z1 zero-LiDAR 只置零模型侧 `lidar_feature`、不关闭 raw LiDAR safety-box；结果显示当前模型侧 LiDAR BEV 可能是负贡献。
+- 已完成 20-route sensor / LiDAR 诊断补充：Z0/Z1 和 condition-v1 L0/L1 zero-LiDAR 只置零模型侧 `lidar_feature`、不关闭 raw LiDAR safety-box；L1 full20 `DS=50.77 / RC=88.97 / NDS=34.95` 是目前 condition-v1 最强候选，但仍需补 A9 LiDAR-on 对照拆分 PID 和 zero model-LiDAR 收益。
 
 ## 运行时功能补齐
 

@@ -10,7 +10,7 @@
 - full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - baseline-basic 开环 / 闭环结果已完成并下载到本地 `dd_logs` 镜像路径；open-loop six-scene `l1_mean=0.0092`，all-scenarios `l1_mean=0.0192`，Bench2Drive 220 closed-loop `DS=44.81`、`RC=79.48`、`NDS=35.52`
 - baseline-basic 已完成一组 20-route 闭环 A/B；当前最明显正向方向是空间 PID 速度参数，`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` DS/NDS 最高但 collision / timeout 风险更高
-- 20-route Z0/Z1 以及 condition-v1 L0 zero-LiDAR 诊断显示当前模型侧 LiDAR BEV 接入不稳定：zero-LiDAR 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；项目要求使用 LiDAR，因此 no-LiDAR / zero-LiDAR 只能作为诊断上界，下一步 LiDAR 方向应优先验证 train-vs-online LiDAR BEV contract、做 channel ablation，并补 LiDAR fusion gate / dropout 与 auxiliary supervision
+- 20-route Z0/Z1 以及 condition-v1 L0/L1 zero-LiDAR 诊断显示当前模型侧 LiDAR BEV 接入不稳定：L1 `DS=50.77/RC=88.97/NDS=34.95` 是目前 condition-v1 最强 20-route 候选，但它同时改了 A9 PID 和 zero model-LiDAR；zero-LiDAR 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。项目要求使用 LiDAR，因此 no-LiDAR / zero-LiDAR 只能作为诊断上界，下一步应补 `condition-v1 + A9 PID + LiDAR ON` 对照，并优先验证 train-vs-online LiDAR BEV contract、做 channel ablation，补 LiDAR fusion gate / dropout 与 auxiliary supervision
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -135,6 +135,8 @@
   - [x] 明确 `regnety_032` 是 `timm` 2D CNN backbone 名称，不是 LiDAR 专用表示；切换它需要 full retrain，不能用当前 ResNet34 checkpoint warm-start 得到正式结论
   - [x] 记录 zero-LiDAR 诊断边界：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 safety-box raw LiDAR
   - [x] 记录 condition-v1 L0 诊断：共同 19 条 route 上 zero model-LiDAR `DS=43.58 / RC=82.10 / IP=0.509`，相对 C0 common19 的 `DS=39.07 / RC=86.31 / IP=0.433` 提升 DS/IP 但降低 RC，并新增 6 条 route deviation
+  - [x] 记录 condition-v1 L1 诊断：A9 PID + zero model-LiDAR full20 `DS=50.77 / RC=88.97 / NDS=34.95 / IP=0.544`，`12 completed / 5 deviated / 3 blocked`，stuck 从 C0 的 `3158` 降到 `783`，safety-box stop 从 `12179` 降到 `8132`
+  - [ ] 补 `condition-v1 + A9 PID + LiDAR ON` 对照，拆分 A9 PID 收益和 zero model-LiDAR 收益；建议命名为 `C2_A9_pid_7_3_fallback` 或等价清晰名称
   - [ ] 把 no-LiDAR / zero-LiDAR 定位为诊断上界，而不是正式主线；项目最终路线仍应使用 LiDAR
   - [ ] 优先实现 LiDAR BEV contract 统计 / dump，对比 B2D `.laz -> histogram` 与 online `half-scan concat -> histogram` 的点数、非零率、通道均值 / 饱和率和左右前后 occupancy
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
