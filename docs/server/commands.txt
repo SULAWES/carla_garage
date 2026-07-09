@@ -11,6 +11,8 @@ srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --pty /bin
 
 srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
 
+srun -p L40 -J dujiayuan_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
+
 srun -p L40 -J ltr_debug -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=192g --pty /bin/bash
 
 srun -p L40 -J ltr_train -N 1 -n 1 --gres=gpu:l40:1 --cpus-per-task=7 --mem=512g --pty /bin/bash
