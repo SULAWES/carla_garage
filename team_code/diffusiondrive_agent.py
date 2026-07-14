@@ -37,12 +37,21 @@ Env vars:
   - DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG: route debug angle warning threshold in degrees (default: 45.0).
   - DIFFUSIONDRIVE_DEBUG_SAFETY_BOX: print structured safety-box diagnostics (default: 0).
   - DIFFUSIONDRIVE_DEBUG_INTERVAL: control diagnostic print interval in steps (default: 20).
+  - DIFFUSIONDRIVE_DEBUG_LIDAR_CONTRACT: record online half/full-scan LiDAR contract stats (default: 0).
+  - DIFFUSIONDRIVE_LIDAR_DEBUG_INTERVAL: LiDAR statistics interval in steps (default: 20).
+  - DIFFUSIONDRIVE_LIDAR_DUMP_INTERVAL: periodic raw/BEV NPZ dump interval; 0 disables (default: 0).
+  - DIFFUSIONDRIVE_LIDAR_DUMP_MAX: maximum NPZ dumps per agent process (default: 50).
+  - DIFFUSIONDRIVE_LIDAR_HISTORY_STEPS: recent diagnostic records kept for terminal/event context (default: 100).
+  - DIFFUSIONDRIVE_LIDAR_DEBUG_DIR: optional output root; defaults to OUT/lidar_diagnostics.
 """
 
+import json
 import os
 import math
 from collections import deque
 from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -61,6 +70,11 @@ from nav_planner import RoutePlanner
 import transfuser_utils as t_u
 
 from diffusiondrive.config_adapter import DiffusionDriveRuntimeOverrides, build_diffusiondrive_config
+from diffusiondrive.lidar_diagnostics import (
+    LidarDiagnosticWriter,
+    compute_lidar_contract_record,
+    make_json_safe,
+)
 from diffusiondrive.model import V2TransfuserModel
 from diffusiondrive.status import build_status_feature
 from birds_eye_view.run_stop_sign import RunStopSign
@@ -183,6 +197,11 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.debug_route = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_ROUTE", "0"))
         self.debug_safety_box = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_SAFETY_BOX", "0"))
         self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
+        self.debug_lidar_contract = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_LIDAR_CONTRACT", "0"))
+        self.lidar_debug_interval = max(1, env_int("DIFFUSIONDRIVE_LIDAR_DEBUG_INTERVAL", 20))
+        self.lidar_dump_interval = max(0, env_int("DIFFUSIONDRIVE_LIDAR_DUMP_INTERVAL", 0))
+        self.lidar_dump_max = max(0, env_int("DIFFUSIONDRIVE_LIDAR_DUMP_MAX", 50))
+        self.lidar_history_steps = max(1, env_int("DIFFUSIONDRIVE_LIDAR_HISTORY_STEPS", 100))
         self.route_debug_distance_warn = env_float("DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN", 3.0)
         self.route_debug_angle_warn = env_float("DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG", 45.0)
         self.low_speed_steer = strtobool(os.environ.get("DIFFUSIONDRIVE_LOW_SPEED_STEER", "0"))
@@ -208,6 +227,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive control debug:", self.debug_control)
         print("DiffusionDrive route debug:", self.debug_route)
         print("DiffusionDrive safety-box debug:", self.debug_safety_box)
+        print("DiffusionDrive LiDAR contract debug:", self.debug_lidar_contract)
         print("DiffusionDrive zero LiDAR:", self.zero_lidar)
         print("DiffusionDrive route condition values:", self.use_route_condition)
         print("DiffusionDrive speed-head longitudinal control:", self.use_speed_head_controller)
@@ -285,6 +305,30 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.last_route_debug = {}
         self.last_safety_box_debug = {}
         self.last_speed_head_debug = {"available": False}
+        self.lidar_diagnostic_history = deque(maxlen=self.lidar_history_steps)
+        self.lidar_diagnostic_writer = None
+        self.last_lidar_event_step = {}
+        if self.debug_lidar_contract:
+            output_root_value = os.environ.get("DIFFUSIONDRIVE_LIDAR_DEBUG_DIR", "").strip()
+            if output_root_value:
+                output_root = Path(output_root_value)
+            else:
+                run_output = os.environ.get("OUT", "").strip()
+                output_root = Path(run_output) / "lidar_diagnostics" if run_output else Path("/tmp/diffusiondrive_lidar_diagnostics")
+            route_index_value = os.environ.get("START_IDX", "unknown")
+            run_tag = f"route_{route_index_value}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_pid_{os.getpid()}"
+            lidar_output_dir = output_root / run_tag
+            self.lidar_diagnostic_writer = LidarDiagnosticWriter(
+                lidar_output_dir,
+                max_dumps=self.lidar_dump_max,
+            )
+            print(
+                "DiffusionDrive LiDAR diagnostics: "
+                f"dir={lidar_output_dir}, stats_interval={self.lidar_debug_interval}, "
+                f"dump_interval={self.lidar_dump_interval}, max_dumps={self.lidar_dump_max}, "
+                f"history={self.lidar_history_steps}",
+                flush=True,
+            )
 
     def _apply_runtime_sensor_overrides(self) -> None:
         """Apply online sensor/preprocessing overrides before data/model setup."""
@@ -1119,7 +1163,8 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             lidar_histogram = torch.from_numpy(lidar_histogram).unsqueeze(0).to(self.device, dtype=torch.float32)
             lidar_bev.append(lidar_histogram)
 
-        lidar_bev = torch.cat(lidar_bev, dim=1)
+        lidar_bev_original = torch.cat(lidar_bev, dim=1)
+        lidar_bev = lidar_bev_original
         if self.zero_lidar:
             lidar_bev = torch.zeros_like(lidar_bev)
 
@@ -1152,6 +1197,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             desired_speed_override=desired_speed_override,
         )
         stop_for_stop_sign = self._stop_sign_controller_step(speed)
+        lidar_event = None
 
         # Restart mechanism in case the car got stuck.
         if speed < 0.1:
@@ -1176,12 +1222,14 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             emergency_stop = (len(safety_box) > 0)
 
             if not emergency_stop:
+                lidar_event = "creep"
                 print('Detected agent being stuck. Step: ', self.step)
                 self._maybe_print_safety_box_debug("creep")
                 throttle = max(self.config.creep_throttle, throttle)
                 brake = False
                 self.force_move -= 1
             else:
+                lidar_event = "safety_stop"
                 print('Creeping stopped by safety box. Step: ', self.step)
                 self._maybe_print_safety_box_debug("safety_stop")
                 throttle = 0.0
@@ -1199,10 +1247,156 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         else:
             self.control = control
 
+        self._maybe_record_lidar_contract(
+            lidar_current=lidar_current,
+            lidar_last_aligned=lidar_last,
+            lidar_full=lidar_full,
+            lidar_bev_original=lidar_bev_original,
+            lidar_bev_model=lidar_bev,
+            waypoints=waypoints,
+            route_points_ego=tick_data.get('route_points_ego'),
+            speed=speed,
+            event=lidar_event,
+        )
         self._maybe_print_control_debug(speed, stop_for_stop_sign)
         self._maybe_print_route_debug()
 
         return self.control
+
+    def _maybe_record_lidar_contract(
+        self,
+        *,
+        lidar_current,
+        lidar_last_aligned,
+        lidar_full,
+        lidar_bev_original,
+        lidar_bev_model,
+        waypoints,
+        route_points_ego,
+        speed,
+        event,
+    ):
+        if not self.debug_lidar_contract or self.lidar_diagnostic_writer is None:
+            return
+
+        periodic_stats = (self.step % self.lidar_debug_interval) == 0
+        periodic_dump = self.lidar_dump_interval > 0 and (self.step % self.lidar_dump_interval) == 0
+        event_dump = False
+        if event is not None:
+            last_event_step = self.last_lidar_event_step.get(event)
+            event_dump = last_event_step is None or (self.step - last_event_step) >= self.lidar_debug_interval
+        if not periodic_stats and not periodic_dump and not event_dump:
+            return
+
+        diagnostic_event = event if event is not None else "periodic"
+        current_bev = self.data.lidar_to_histogram_features(
+            lidar_current,
+            use_ground_plane=self.config.use_ground_plane,
+        )
+        last_bev = self.data.lidar_to_histogram_features(
+            lidar_last_aligned,
+            use_ground_plane=self.config.use_ground_plane,
+        )
+        trajectory = waypoints.detach().float().cpu().numpy()
+        context = {
+            "route_index": os.environ.get("START_IDX"),
+            "zero_lidar": bool(self.zero_lidar),
+            "speed": float(speed),
+            "desired_speed": getattr(self, "last_pid_debug", {}).get("desired_speed"),
+            "control": {
+                "steer": float(self.control.steer),
+                "throttle": float(self.control.throttle),
+                "brake": float(self.control.brake),
+            },
+            "stuck_detector": int(self.stuck_detector),
+            "force_move": int(self.force_move),
+            "trajectory_end": trajectory[0, -1].tolist(),
+            "command": getattr(self, "last_command_debug", {}),
+            "pid": getattr(self, "last_pid_debug", {}),
+            "route": getattr(self, "last_route_debug", {}),
+            "safety_box": getattr(self, "last_safety_box_debug", {}),
+        }
+        stage_inputs = (
+            ("current_half", lidar_current, current_bev),
+            ("previous_half_aligned", lidar_last_aligned, last_bev),
+            ("full_scan", lidar_full, lidar_bev_original),
+            ("model_input", lidar_full, lidar_bev_model),
+        )
+        records = []
+        for stage, points, bev in stage_inputs:
+            record = compute_lidar_contract_record(
+                points,
+                bev,
+                self.config,
+                source="carla_online",
+                stage=stage,
+                step=self.step,
+                event=diagnostic_event,
+                context=context,
+            )
+            records.append(record)
+            self.lidar_diagnostic_writer.record(record)
+            print(
+                "[DiffusionDriveLidarContract] "
+                + json.dumps({
+                    "step": self.step,
+                    "event": diagnostic_event,
+                    "stage": stage,
+                    "point_count": record["point_count"],
+                    "model_point_count": record["model_point_count"],
+                    "above_split_ratio": record["above_split_ratio"],
+                    "front_ratio": record["front_ratio"],
+                    "left_ratio": record["left_ratio"],
+                    "bev_nonzero_ratio": record["bev_nonzero_ratio"],
+                    "bev_mean": record["bev_mean"],
+                    "bev_saturation_ratio": record["bev_saturation_ratio"],
+                }, separators=(",", ":"), sort_keys=True, allow_nan=False),
+                flush=True,
+            )
+
+        history_entry = {
+            "step": self.step,
+            "event": diagnostic_event,
+            "context": make_json_safe(context),
+            "stages": {
+                record["stage"]: {
+                    "point_count": record["point_count"],
+                    "model_point_count": record["model_point_count"],
+                    "above_split_ratio": record["above_split_ratio"],
+                    "front_ratio": record["front_ratio"],
+                    "back_ratio": record["back_ratio"],
+                    "left_ratio": record["left_ratio"],
+                    "right_ratio": record["right_ratio"],
+                    "bev_nonzero_ratio": record["bev_nonzero_ratio"],
+                    "bev_mean": record["bev_mean"],
+                    "bev_saturation_ratio": record["bev_saturation_ratio"],
+                }
+                for record in records
+            },
+        }
+        self.lidar_diagnostic_history.append(history_entry)
+
+        if event_dump:
+            self.last_lidar_event_step[event] = self.step
+        if event_dump or periodic_dump:
+            dump_event = event if event_dump else "periodic"
+            dump_path = self.lidar_diagnostic_writer.dump_bundle(
+                step=self.step,
+                event=dump_event,
+                arrays={
+                    "lidar_current": lidar_current,
+                    "lidar_last_aligned": lidar_last_aligned,
+                    "lidar_full": lidar_full,
+                    "lidar_bev_original": lidar_bev_original,
+                    "lidar_bev_model": lidar_bev_model,
+                    "trajectory": trajectory,
+                    "route_points_ego": route_points_ego,
+                },
+                metadata={"context": context, "contract_records": records},
+                recent_history=self.lidar_diagnostic_history,
+            )
+            if dump_path is not None:
+                print(f"[DiffusionDriveLidarDump] path={dump_path}", flush=True)
 
     def _maybe_print_control_debug(self, speed, stop_for_stop_sign):
         if not self.debug_control or (self.step % self.debug_control_interval) != 0:
@@ -1304,6 +1498,25 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         AutonomousAgent only defines destroy(self). Override it here so cleanup
         works with both evaluator variants.
         """
+        writer = getattr(self, "lidar_diagnostic_writer", None)
+        if writer is not None:
+            try:
+                writer.close(
+                    context={
+                        "source": "carla_online",
+                        "route_index": os.environ.get("START_IDX"),
+                        "last_step": getattr(self, "step", None),
+                        "zero_lidar": getattr(self, "zero_lidar", None),
+                        "results_type": type(results).__name__ if results is not None else None,
+                    },
+                    recent_history=getattr(self, "lidar_diagnostic_history", ()),
+                )
+                print(
+                    f"[DiffusionDriveLidarContract] summary={writer.output_dir / 'summary.json'}",
+                    flush=True,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                print(f"[DiffusionDriveLidarContract] failed to finalize diagnostics: {exc}", flush=True)
         for attr in ("model", "data", "config", "dd_config", "ukf", "stop_sign_criteria", "hero_actor"):
             if hasattr(self, attr):
                 delattr(self, attr)

@@ -39,6 +39,7 @@ logsTD
 database_org
 outputs
 lidar*
+!team_code/diffusiondrive/lidar_diagnostics.py
 launch.json
 launch2.json
 

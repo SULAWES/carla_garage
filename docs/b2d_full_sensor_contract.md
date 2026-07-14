@@ -31,6 +31,7 @@ B2D Full 原生格式：
 
 - front camera: `1600x900, fov=70, x=0.8, y=0.0, z=1.6`
 - LiDAR: `x=-0.39, y=0.0, z=1.84, yaw=0, range=85`
+- LiDAR collection attributes: `channels=64, points_per_second=600000, upper_fov=10, lower_fov=-30, dropoff_general_rate=0, dropoff_intensity_limit=0, dropoff_zero_intensity=0`
 
 注意：远端当前用于 full training 的 B2D Full 图像文件实际观测为 `512x1024`，不是文档早期假设的 `1600x900` tensor。`1600x900, fov=70` 仍应作为原始采集 provenance 记录，但训练脚本的 `--b2d-source-image-height/width` 默认已修正为 `512/1024`。
 
@@ -49,7 +50,8 @@ B2D Full 原生格式：
 当前 `DiffusionDriveAgent` 在线推理仍使用 garage sensor contract：
 
 - front camera: `512x1024, fov=110, x=-1.5, y=0.0, z=2.0`
-- LiDAR: `x=0.0, y=0.0, z=2.5, yaw=-90`
+- LiDAR: `x=0.0, y=0.0, z=2.5, yaw=-90, range=85`
+- LiDAR wrapper attributes: `channels=64, points_per_second=600000, upper_fov=10, lower_fov=-30, dropoff_general_rate=0.45, dropoff_intensity_limit=0.8, dropoff_zero_intensity=0.4`
 - LiDAR histogram: `256x256`, `pixels_per_meter=4.0`
 - 继续复用半帧拼接、多帧 buffer、realign、stuck / safety box 和 PID 控制。
 
@@ -70,6 +72,13 @@ B2D Full 原生格式：
 
 `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 runtime safety-box raw LiDAR。因此 zero-LiDAR 诊断变好时，优先说明模型侧 BEV LiDAR 分支存在 train-vs-online contract gap、fusion 噪声或监督不足风险，不能直接推出 safety-box 应该关闭。项目最终路线仍应使用 LiDAR；zero/no-LiDAR 只作为诊断上界和归因工具。
 
+当前有两个互补诊断入口：
+
+- `tools/inspect_diffusiondrive_lidar_contract.py`：从 B2D `.laz` 读取保存的 full scan，用共享 schema 生成 `records.jsonl`、`summary.json` 和受上限约束的 NPZ dump。
+- `DIFFUSIONDRIVE_DEBUG_LIDAR_CONTRACT=1`：在线记录 `current_half`、`previous_half_aligned`、`full_scan`、`model_input` 四个 stage；`DIFFUSIONDRIVE_LIDAR_DEBUG_INTERVAL` 控制统计频率，`DIFFUSIONDRIVE_LIDAR_DUMP_INTERVAL` 和 `DIFFUSIONDRIVE_LIDAR_DUMP_MAX` 控制数组 dump。
+
+二者统计 raw / finite / in-BEV / below-split / above-split / model point count，z 分位数，front/back/left/right occupancy，以及 BEV nonzero / mean / max / saturation 和逐通道汇总。先比较分布，再决定是否修改坐标、过滤或融合；不要只凭单张 BEV 图判断 contract。
+
 ## 已知 Gap
 
 B2D Full raw sensor 和在线 garage sensor suite 不完全一致：
@@ -77,7 +86,7 @@ B2D Full raw sensor 和在线 garage sensor suite 不完全一致：
 - camera FOV 不同：`70` vs `110`
 - camera pose 不同：B2D raw 在车前方，garage 在线相机在 `x=-1.5,z=2.0`
 - raw provenance / source tensor 记录需要区分：采集几何记录为 `1600x900`，当前训练文件实际为 `512x1024`
-- LiDAR pose / yaw / range 不同
+- LiDAR nominal range / channels / points-per-second / vertical FOV 相同，但传感器 pose / yaw、ray origin 和 dropoff 参数不同；尤其 collection 禁用 dropoff，而在线 wrapper 使用非零 dropoff，可能造成显著点密度差异
 - 当前 resize / crop 只能对齐 tensor shape，不能消除真实几何 gap
 
 当前结论不是“raw B2D 已经等价于在线 sensor suite”，而是：

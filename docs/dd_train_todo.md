@@ -136,9 +136,10 @@
   - [x] 记录 zero-LiDAR 诊断边界：`DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型侧 `lidar_feature`，不关闭 safety-box raw LiDAR
   - [x] 记录 condition-v1 L0 诊断：共同 19 条 route 上 zero model-LiDAR `DS=43.58 / RC=82.10 / IP=0.509`，相对 C0 common19 的 `DS=39.07 / RC=86.31 / IP=0.433` 提升 DS/IP 但降低 RC，并新增 6 条 route deviation
   - [x] 记录 condition-v1 L1 诊断：A9 PID + zero model-LiDAR full20 `DS=50.77 / RC=88.97 / NDS=34.95 / IP=0.544`，`12 completed / 5 deviated / 3 blocked`，stuck 从 C0 的 `3158` 降到 `783`，safety-box stop 从 `12179` 降到 `8132`
-  - [ ] 补 `condition-v1 + A9 PID + LiDAR ON` 对照，拆分 A9 PID 收益和 zero model-LiDAR 收益；建议命名为 `C2_A9_pid_7_3_fallback` 或等价清晰名称
-  - [ ] 把 no-LiDAR / zero-LiDAR 定位为诊断上界，而不是正式主线；项目最终路线仍应使用 LiDAR
-  - [ ] 优先实现 LiDAR BEV contract 统计 / dump，对比 B2D `.laz -> histogram` 与 online `half-scan concat -> histogram` 的点数、非零率、通道均值 / 饱和率和左右前后 occupancy
+  - [x] 补 `condition-v1 + A9 PID + LiDAR ON` 对照：C2 full20 `DS=41.00 / RC=94.40 / IP=0.422 / NDS=19.56`，对比同 A9 的 L1 zero-LiDAR 为 `DS -9.77 / RC +5.44 / IP -0.122 / NDS -15.39`；LiDAR-on 提升 completion / 减少终止性 deviation，但碰撞、越线、低速和 blocked 更差
+  - [x] 把 no-LiDAR / zero-LiDAR 定位为诊断上界，而不是正式主线；项目最终路线仍应使用 LiDAR
+  - [x] `inspect_diffusiondrive_eval_errors.py` 支持 `--lidar-mode original|zero|shuffle`，并在 shuffle CSV 中记录确定性 donor 样本，用于同一 checkpoint / manifest 的开环 LiDAR 归因
+  - [x] 实现共享 LiDAR BEV contract 统计 / dump，对比 B2D `.laz -> histogram` 与 online `half-scan concat -> histogram` 的点数、保留率、z 分位数、非零率、通道均值 / 饱和率和左右前后 occupancy
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
   - [ ] 评估 LiDAR fusion gate / dropout full retrain：保留 LiDAR 输入，但避免未校准 LiDAR BEV 在 backbone early fusion 中污染视觉特征
   - [ ] 补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision，让 LiDAR 分支学习可解释的近场几何 / 动态体语义，而不是只靠 trajectory loss 间接学习

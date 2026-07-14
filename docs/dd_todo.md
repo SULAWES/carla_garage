@@ -62,8 +62,8 @@
   - [x] 明确 zero-LiDAR 只诊断模型侧 BEV LiDAR 分支，不能用于判断 safety-box 是否该关闭
   - [x] 记录 condition-v1 L0 zero model-LiDAR 诊断：共同 19 条 route 上 `DS=43.58` 高于 C0 common19 的 `39.07`，但 route completion 降低且 route deviation 从 `0` 增至 `6`，说明 LiDAR 问题不能简单归结为“移除 LiDAR”
   - [x] 记录 condition-v1 L1 zero model-LiDAR 诊断：A9 PID full20 `DS=50.77 / RC=88.97 / NDS=34.95`，当前最强 condition-v1 候选，但需要 A9 LiDAR-on 对照拆分收益来源
-  - [ ] 补 `condition-v1 + A9 PID + LiDAR ON` 固定 20-route 对照，和 L1 只差 `DIFFUSIONDRIVE_ZERO_LIDAR`
-  - [ ] 增加在线 LiDAR BEV dump / 统计：记录 `point_count`、nonzero ratio、channel mean/max、saturation ratio、front/back/left/right occupancy，用于对比 B2D `.laz` histogram 与 online half-scan concat histogram
+  - [x] 补 `condition-v1 + A9 PID + LiDAR ON` 固定 20-route C2 对照：20/20 有效，`DS=41.00 / RC=94.40 / IP=0.422 / NDS=19.56`；同 A9 下 zero-LiDAR 的 L1 为 `50.77 / 88.97 / 0.544 / 34.95`，确认 LiDAR 分支有效但局部安全 / penalty 贡献高度不稳定
+  - [x] 增加在线 LiDAR BEV dump / 统计：共享 schema 记录 point count / model 保留率 / z 分位数 / nonzero / channel mean/max / saturation / front-back-left-right occupancy，并拆分 `current_half`、`previous_half_aligned`、`full_scan`、`model_input`；事件和周期 dump 均有限频 / 上限
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
   - [ ] 评估 LiDAR fusion gate / dropout：保留 LiDAR 输入，但降低未校准 BEV 分支对 image feature 的早期污染
   - [ ] 若继续出现负贡献，优先补 `bev_semantic_map`、`agent_states`、`agent_labels` 等辅助监督，而不是把 zero-LiDAR 当正式方案

@@ -594,11 +594,26 @@ L0_A8 zero-lidar common19: DS=43.58, RC=82.10, IP=0.509
 L1_A9 zero-lidar common19: DS=48.51, RC=88.38, IP=0.524
 ```
 
+2026-07-14 已补齐同一 A9 PID 的 LiDAR-on 对照：
+
+```text
+C2_A9_pid_7_3_fallback:
+  setting: condition-v1 checkpoint, route token on, speed-head off,
+           A9 spatial PID, DIFFUSIONDRIVE_ZERO_LIDAR=0
+  valid routes: 20/20, no infrastructure failure or retry
+  DS=41.00, RC=94.40, infraction_penalty=0.422, NDS=19.56
+  avg_speed=4.59 km/h
+  status=16 completed / 0 route-deviated / 4 blocked
+  stuck_logs=2834, safety_box_stop_logs=10268
+```
+
+同一 A9 PID 下，L1 zero-LiDAR 相对 C2 LiDAR-on 为 `DS +9.77 / RC -5.44 / IP +0.122 / NDS +15.39 / speed +1.04 km/h`。C2 的完成率更高，但 vehicle / layout collision、outside-lane、min-speed 和 blocked event 都更多。逐 route 上并非一致退化：`50/94/153/167/185` 是主要 LiDAR-on 负向分叉，`139` 则是明显正向分叉。
+
 解释边界：
 
 - L0 / L1 进一步支持“当前模型侧 BEV LiDAR 分支不稳定”：zero model-LiDAR 后 `DS / infraction_penalty / avg speed` 提升，`stuck` 和 `safety_box_stop` 日志减少。
-- L1 是当前 condition-v1 里最强的 20-route closed-loop 候选，但它同时改变了两件事：A8 -> A9 PID，以及 lidar-on -> zero model-LiDAR。因此还不能把全部收益归因给 LiDAR。
-- 下一步需要补 `condition-v1 + A9 PID + LiDAR ON`，即 `C2_A9_pid_7_3_fallback` 或等价命名。若 C2 明显低于 L1，模型侧 BEV LiDAR 负贡献才更实锤；若 C2 接近 L1，则主要收益可能来自 A9 PID。
+- C2 已拆分 A9 PID 与 LiDAR 开关：A9 在 LiDAR-on 下主要提升推进速度和 completion，但没有提升 DS / NDS；L1 的 score / penalty 收益主要来自 zero model-LiDAR，而非 A9 单独贡献。
+- LiDAR 分支不是无效输入：LiDAR-on 把 failed route deviation 从 L1 的 `5` 降到 `0`、completed 从 `12` 提到 `16`，同时又在少数 route 上造成灾难性碰撞 / 越线 / blocked 分叉。这更符合“有效但 contract / fusion 不稳定”，而不是“完全没学到 LiDAR”。
 - L0/L1 不是“最终应该不用 LiDAR”的证据。zero model-LiDAR 仍会带来 route deviation 风险，并且项目要求最终使用 LiDAR。
 - 因为项目要求使用 LiDAR，后续主线应从“去掉 LiDAR”调整为“修复 LiDAR 接入”：把 no-LiDAR / zero-LiDAR 只作为诊断上界和归因工具。
 - 当前更准确的结论是：LiDAR 传感器本身仍然需要保留；问题集中在模型侧 `lidar_feature` 的传感器合同、BEV 表示、fusion 强度和监督方式。
@@ -642,6 +657,8 @@ LiDAR / safety-box 应在以下情况升为主线问题：
 
    目的不是作为正式结果，而是判断当前 LiDAR BEV 对闭环是正贡献、弱贡献，还是存在 domain gap 噪声。
 
+   2026-07-14 起，`tools/inspect_diffusiondrive_eval_errors.py --lidar-mode original|zero|shuffle` 还可在同一 checkpoint / manifest 上做开环归因；shuffle 使用确定性的全数据集错配并记录 donor，避免只比较 original 与全零后无法区分“模型忽略 LiDAR”和“模型错误使用 LiDAR”。
+
 4. 增加 LiDAR BEV contract dump。对在线推理前的 `lidar_bev` 和离线 B2D `.laz` 经同一 histogram 后的 BEV 统计：
 
    ```text
@@ -653,6 +670,8 @@ LiDAR / safety-box 应在以下情况升为主线问题：
    ```
 
    目标是确认训练侧 `.laz -> histogram` 和闭环侧 `half-scan concat -> histogram` 是否同分布。
+
+   2026-07-14 已实现第一版：`tools/inspect_diffusiondrive_lidar_contract.py` 检查 B2D raw，在线用 `DIFFUSIONDRIVE_DEBUG_LIDAR_CONTRACT=1` 记录 `current_half / previous_half_aligned / full_scan / model_input`。两侧共享统计 schema，并用 interval / max 对周期和事件 NPZ dump 限频。正式 C2 不开启 dump，另选少量坏 route 做 contract 诊断。
 
 5. 做 channel ablation，而不是只做 whole-LiDAR ablation：
 

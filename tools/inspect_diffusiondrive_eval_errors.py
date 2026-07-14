@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import random
 import sys
 from pathlib import Path
 from statistics import mean, median
@@ -30,6 +31,7 @@ from diffusiondrive.carla_native_dataset import (  # noqa: E402
     TARGET_MODE_FUTURE_EGO_TIME,
     TARGET_MODE_SPATIAL_PATH,
     Bench2DriveDiffusionDataset,
+    build_lidar_feature,
     load_annotation,
 )
 from diffusiondrive.config_adapter import (  # noqa: E402
@@ -40,8 +42,20 @@ from diffusiondrive.model import V2TransfuserModel  # noqa: E402
 
 
 class IndexedDataset(Dataset):
-    def __init__(self, dataset: Bench2DriveDiffusionDataset) -> None:
+    def __init__(
+        self,
+        dataset: Bench2DriveDiffusionDataset,
+        *,
+        lidar_mode: str = "original",
+        seed: int = 0,
+    ) -> None:
         self.dataset = dataset
+        self.lidar_mode = lidar_mode
+        self.lidar_shuffle_offset = 0
+        if lidar_mode == "shuffle":
+            if len(dataset) < 2:
+                raise RuntimeError("LiDAR shuffle mode requires at least two samples.")
+            self.lidar_shuffle_offset = random.Random(seed).randrange(1, len(dataset))
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -49,6 +63,19 @@ class IndexedDataset(Dataset):
     def __getitem__(self, index: int) -> dict:
         item = self.dataset[index]
         item["index"] = index
+        donor_index = index
+        if self.lidar_mode == "zero":
+            item["features"]["lidar_feature"] = torch.zeros_like(item["features"]["lidar_feature"])
+            donor_index = -1
+        elif self.lidar_mode == "shuffle":
+            donor_index = (index + self.lidar_shuffle_offset) % len(self.dataset)
+            donor_route_dir, donor_frame = self.dataset.samples[donor_index]
+            item["features"]["lidar_feature"] = build_lidar_feature(
+                donor_route_dir,
+                int(donor_frame),
+                self.dataset.config,
+            )
+        item["lidar_donor_index"] = donor_index
         return item
 
 
@@ -67,6 +94,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--lidar-mode",
+        choices=("original", "zero", "shuffle"),
+        default="original",
+        help=(
+            "LiDAR model input ablation. 'shuffle' uses a deterministic dataset-wide cyclic "
+            "permutation so every sample receives another sample's LiDAR."
+        ),
+    )
     parser.add_argument("--target-mode", choices=(TARGET_MODE_SPATIAL_PATH, TARGET_MODE_FUTURE_EGO_TIME), default=TARGET_MODE_SPATIAL_PATH)
     parser.add_argument("--future-stride", type=int, default=10)
     parser.add_argument("--spatial-target-first-distance", type=float, default=2.5)
@@ -148,6 +184,7 @@ def sample_records(
     dataloader: DataLoader,
     device: torch.device,
     max_steps: int | None,
+    lidar_mode: str,
 ) -> Iterator[dict[str, Any]]:
     model.eval()
     with torch.no_grad():
@@ -162,8 +199,19 @@ def sample_records(
             fde = torch.linalg.norm(prediction[:, -1] - target[:, -1], dim=-1)
 
             indices = batch["index"].tolist()
+            donor_indices = batch["lidar_donor_index"].tolist()
             for row, sample_index in enumerate(indices):
                 route_dir, frame = dataset.samples[int(sample_index)]
+                donor_index = int(donor_indices[row])
+                if donor_index >= 0:
+                    donor_route_dir, donor_frame = dataset.samples[donor_index]
+                    donor_scenario = donor_route_dir.parent.name
+                    donor_route = donor_route_dir.name
+                    donor_frame_value = int(donor_frame)
+                else:
+                    donor_scenario = None
+                    donor_route = None
+                    donor_frame_value = None
                 annotation = load_annotation(route_dir, int(frame))
                 target_cpu = target[row].cpu()
                 pred_cpu = prediction[row].cpu()
@@ -171,6 +219,11 @@ def sample_records(
                     "scenario": route_dir.parent.name,
                     "route": route_dir.name,
                     "frame": int(frame),
+                    "lidar_mode": lidar_mode,
+                    "lidar_donor_index": donor_index if donor_index >= 0 else None,
+                    "lidar_donor_scenario": donor_scenario,
+                    "lidar_donor_route": donor_route,
+                    "lidar_donor_frame": donor_frame_value,
                     "l1": float(l1[row].cpu()),
                     "ade": float(ade[row].cpu()),
                     "fde": float(fde[row].cpu()),
@@ -269,8 +322,9 @@ def main() -> None:
         sample_manifest_path=args.sample_manifest,
         skip_first_frames=args.skip_first_frames,
     )
+    indexed_dataset = IndexedDataset(dataset, lidar_mode=args.lidar_mode, seed=args.seed)
     dataloader = DataLoader(
-        IndexedDataset(dataset),
+        indexed_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
@@ -279,6 +333,9 @@ def main() -> None:
     )
     print(f"Samples: {len(dataset)}", flush=True)
     print(f"Scenario samples: {dataset.scenario_sample_counts}", flush=True)
+    print(f"LiDAR mode: {args.lidar_mode}", flush=True)
+    if args.lidar_mode == "shuffle":
+        print(f"LiDAR shuffle offset: {indexed_dataset.lidar_shuffle_offset}", flush=True)
 
     model = V2TransfuserModel(dd_config).to(device)
     load_model(model, args.checkpoint, device)
@@ -290,6 +347,7 @@ def main() -> None:
             dataloader=dataloader,
             device=device,
             max_steps=args.max_steps,
+            lidar_mode=args.lidar_mode,
         )
     )
     print_summary(records)

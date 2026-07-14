@@ -608,10 +608,16 @@ def build_lidar_feature(
     frame: int,
     config: GlobalConfig,
 ) -> torch.Tensor:
-    lidar_path = _frame_path(route_dir / "lidar", frame, ".laz")
-    lidar = laspy.read(str(lidar_path)).xyz
+    lidar = load_lidar_points(route_dir, frame)
     lidar_hist = lidar_to_histogram_features(lidar, config)
     return torch.from_numpy(lidar_hist).float()
+
+
+def load_lidar_points(route_dir: Path, frame: int) -> np.ndarray:
+    """Load one saved B2D LiDAR frame without changing its coordinate system."""
+
+    lidar_path = _frame_path(route_dir / "lidar", frame, ".laz")
+    return np.asarray(laspy.read(str(lidar_path)).xyz)
 
 
 def lidar_to_histogram_features(lidar: np.ndarray, config: GlobalConfig) -> np.ndarray:

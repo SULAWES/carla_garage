@@ -447,6 +447,7 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
   --model-image-height 384 \
   --model-image-width 1024 \
   --image-normalization imagenet \
+  --lidar-mode original \
   --batch-size 16 \
   --num-workers 6 \
   --device cuda:0 \
@@ -454,6 +455,50 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 ```
 
 输出包括 `l1 / ade / fde` 的 mean / median / p90 / p95 / max，以及 top-k 样本的 `scenario / route / frame / speed / command / target_path_length / target_end / pred_end`。
+
+`--lidar-mode` 支持三种模型侧 LiDAR 开环归因方式：
+
+- `original`：使用样本自身的 LiDAR，作为正常对照。
+- `zero`：将模型 LiDAR tensor 全部置零，不影响图像和其他输入。
+- `shuffle`：按 `--seed` 构造确定性的全数据集循环错配，每个样本使用另一个样本的 LiDAR；CSV 会记录 donor 的 sample index、scenario、route 和 frame。若 `shuffle` 与 `zero` 都优于 `original`，更支持当前 LiDAR 分支提供了有害信息；若 `shuffle` 明显差于 `zero`，则模型确实依赖 LiDAR，但输入语义或跨模态对齐可能不正确。
+
+三种模式应使用相同 checkpoint、manifest、sample 顺序和 seed，并分别写入不同 CSV；不要把三种模式混在同一输出文件。
+
+## LiDAR Contract Inspection
+
+`tools/inspect_diffusiondrive_lidar_contract.py` 使用与在线 agent 相同的统计 schema，直接检查 B2D `.laz -> histogram` 数据契约，不做模型 forward。建议先在 full eval manifest 上抽取 scenario-balanced 的 4096 个样本：
+
+```bash
+conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_lidar_contract.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset \
+  --route-glob "*/*" \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial.jsonl \
+  --output-dir /share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1/lidar_contract/b2d_raw_soft_clean_4096 \
+  --max-records 4096 \
+  --frame-sampling 5 \
+  --skip-first-frames 25 \
+  --target-mode spatial_path \
+  --balanced-scenarios \
+  --max-samples-per-scenario 1024 \
+  --dump-every 256 \
+  --max-dumps 16 \
+  --log-every 100
+```
+
+输出目录包含逐样本 `records.jsonl`、按 stage 和 BEV channel 汇总的 `summary.json`，以及受 `--max-dumps` 限制的 `dumps/*.npz` 与对应 metadata。统计覆盖 raw / model point count、有限点和 BEV 范围保留率、below/above split 点数、z 分位数、front/back/left/right occupancy、BEV nonzero / mean / max / saturation 及逐通道分布。
+
+在线闭环使用同一 schema，但额外拆成 `current_half`、`previous_half_aligned`、`full_scan` 和 `model_input` 四个 stage：
+
+```bash
+DIFFUSIONDRIVE_DEBUG_LIDAR_CONTRACT=1 \
+DIFFUSIONDRIVE_LIDAR_DEBUG_INTERVAL=20 \
+DIFFUSIONDRIVE_LIDAR_DUMP_INTERVAL=200 \
+DIFFUSIONDRIVE_LIDAR_DUMP_MAX=30 \
+DIFFUSIONDRIVE_LIDAR_HISTORY_STEPS=100 \
+bash tools/run_baseline_basic_closed_loop.sh
+```
+
+默认输出到 `${OUT}/lidar_diagnostics/<route_timestamp_pid>/`，也可用 `DIFFUSIONDRIVE_LIDAR_DEBUG_DIR` 改根目录。周期性 dump 默认关闭；creep / safety-box stop 会在 rate limit 和 dump 上限内保存事件上下文，`destroy()` 会补写 route 终止前的 recent history。正式 C2 对照不要开启该诊断，单独选 route 00 / 24 或 blocked route 做 dump，避免磁盘 I/O 干扰闭环时序。
 
 ## 当前限制
 

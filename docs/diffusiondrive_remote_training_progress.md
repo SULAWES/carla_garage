@@ -445,12 +445,13 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 
 ### Condition-v1 LiDAR diagnostic
 
-2026-07-09 已拉取 `baseline-condition-v1` 上的 L0 / L1 诊断结果：
+2026-07-14 已拉取 `baseline-condition-v1` 上的 L0 / L1 / C2 诊断结果：
 
 ```text
 /home/HeavenlySU/sitp_workspace/dd_logs/full_baseline_condition_v1/ablation_20routes_lidar/
   L0_CV1_A8_zero_model_lidar_fallback/
   L1_CV1_A9_zero_model_lidar_fallback/
+  C2_A9_pid_7_3_fallback/
 ```
 
 运行条件：
@@ -459,23 +460,27 @@ Bench2Drive leaderboard 没有独立的 `creep` 指标。creep 只能通过两�
 - route token：on
 - speed-head longitudinal controller：off
 - PID：L0 使用 A8 spatial PID，`speed_fast=6.0`、`speed_slow=2.5`；L1 使用 A9 spatial PID，`speed_fast=7.0`、`speed_slow=3.0`
-- LiDAR：`DIFFUSIONDRIVE_ZERO_LIDAR=1`，只置零模型侧 BEV LiDAR，不关闭 raw LiDAR safety-box
+- LiDAR：L0 / L1 使用 `DIFFUSIONDRIVE_ZERO_LIDAR=1`；C2 使用 `DIFFUSIONDRIVE_ZERO_LIDAR=0`。三者都保留 raw LiDAR safety-box
 
 聚合结果：
 
 | Experiment | Valid routes | DS | RC | Infraction penalty | NDS | Completed | Deviated | Blocked | Stuck logs | Safety-box stop logs |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `C0_A8_pid_6_2p5_fallback` common19 | 19 | 39.0702 | 86.3089 | 0.4334 | n/a | 13 | 0 | 6 | n/a | n/a |
+| `C0_A8_pid_6_2p5_fallback` full20 | 20 | 41.8398 | 86.9935 | 0.4590 | 27.4672 | 14 | 0 | 6 | 3158 | 12179 |
 | `L0_CV1_A8_zero_model_lidar_fallback` | 19 | 43.5831 | 82.1032 | 0.5095 | 30.2713 | 8 | 6 | 5 | 2712 | 10845 |
 | `L1_CV1_A9_zero_model_lidar_fallback` common19 | 19 | 48.5136 | 88.3847 | 0.5239 | n/a | 11 | 5 | 3 | n/a | n/a |
 | `L1_CV1_A9_zero_model_lidar_fallback` full20 | 20 | 50.7682 | 88.9655 | 0.5445 | 34.9458 | 12 | 5 | 3 | 783 | 8132 |
+| `C2_A9_pid_7_3_fallback` full20 | 20 | 40.9991 | 94.4010 | 0.4224 | 19.5552 | 16 | 0 | 4 | 2834 | 10268 |
 
-L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_attempt2_eval.log` 显示 `SensorReceivedNoData: A sensor took too long to send their data`，应视为基础设施 / 传感器超时，不能计入模型成绩。L1 已有 20/20 有效 route。
+L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_attempt2_eval.log` 显示 `SensorReceivedNoData: A sensor took too long to send their data`，应视为基础设施 / 传感器超时，不能计入模型成绩。L1 / C2 均有 20/20 有效 route。C2 每条 route 只有一次有效 attempt，没有 setup / agent / simulation crash；日志确认与 L1 使用相同 checkpoint、ImageNet normalization、JPEG artifact、route token、A9 PID 和严格 `769/769` tensor 加载，模型侧 LiDAR ON/OFF 是有效主变量。
 
 结论：
 
 - L0 延续了 Z0/Z1 的方向：zero model-LiDAR 后低速 / stuck / safety-box stop 有缓和，`DS` 和 infraction penalty 改善。
 - 但 L0 也引入了明显 route deviation：共同 19 条 route 中从 C0 的 `0` 条 route-deviated 变为 L0 的 `6` 条。
-- L1 是目前 condition-v1 下最强的 20-route closed-loop 候选：相对 C0 full20，`DS +8.93`、`RC +1.97`、`NDS +7.48`，blocked 从 `6` 降到 `3`，stuck 从 `3158` 降到 `783`，safety-box stop 从 `12179` 降到 `8132`。代价是 route deviation 从 `0` 增到 `5`。
-- L1 同时改变了 PID 和模型侧 LiDAR 输入，因此不是纯 LiDAR ablation。下一步需要补 `condition-v1 + A9 PID + LiDAR ON`（`C2_A9_pid_7_3_fallback` 或等价命名），用于拆分 A9 PID 收益与 zero model-LiDAR 收益。
-- 因此当前不能得出“最终移除 LiDAR”的结论；更合理的判断是当前模型侧 LiDAR BEV 接入不稳定，LiDAR contract / channel / fusion / auxiliary supervision 需要作为主线修复。
+- C0 -> C2 在 LiDAR-on 条件下只改变 A8 -> A9 PID：`DS -0.84`、`RC +7.41`、`IP -0.0366`、`NDS -7.91`、平均速度 `+1.09 km/h`，completed 从 `14` 增到 `16`、blocked 从 `6` 降到 `4`。因此 A9 的主要收益是推进速度和 route completion，不是处罚质量。
+- C2 -> L1 在同一 A9 PID 下只把模型 LiDAR 置零：`DS +9.77`、`RC -5.44`、`IP +0.1221`、`NDS +15.39`、平均速度 `+1.04 km/h`。zero model-LiDAR 降低 completion / 增加终止性 route deviation，但显著改善碰撞、越线、低速和归一化处罚。
+- C2 相对 L1 的 raw event 为 vehicle collision `20 vs 17`、layout collision `5 vs 4`、outside-lane `10 vs 6`、min-speed `44 vs 35`、vehicle-blocked `5 vs 3`；stuck / safety-stop 也从 `783/8132` 升到 `2834/10268`。
+- 逐 route 配对中 C2 对 L1 为 `8` 胜 `12` 负，DS 中位差只有 `-0.93`，但 route `50/94/153/167/185` 出现 `-37.26/-38.22/-67.89/-44.33/-32.21` 的灾难性分叉；route `139` 则反向提升 `+46.23`。稳定 route `00/04/24/212` 基本一致，说明 LiDAR 分支不是被模型忽略，而是在少数交互场景中产生强且不稳定的影响。
+- 当前结论不是“LiDAR 一律有害”：LiDAR-on 将 failed route-deviation 从 `5` 降到 `0`，并把 completed 从 `12` 提到 `16`；但它显著恶化局部安全 / 处罚质量。项目要求保留 LiDAR，下一步应先用已实现的 train-vs-online contract dump 和 `original/zero/shuffle` 开环归因定位分布 / fusion 问题，再做 channel ablation、fusion gate / dropout 和 auxiliary supervision。
