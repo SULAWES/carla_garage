@@ -7,6 +7,10 @@ from typing import Any, Optional
 import numpy as np
 
 from .config import DiffusionDriveConfig
+from .inference_diagnostics import (
+    normalize_diffusion_noise_mode,
+    validate_diffusion_noise_seed,
+)
 
 
 @dataclass(frozen=True)
@@ -15,18 +19,36 @@ class DiffusionDriveRuntimeOverrides:
 
     anchor_path: str = ""
     backbone_path: str = ""
+    diffusion_infer_noise_mode: Optional[str] = None
+    diffusion_infer_noise_seed: Optional[int] = None
 
     @classmethod
     def from_environment(cls, cwd: Optional[str] = None) -> "DiffusionDriveRuntimeOverrides":
         anchor_path = os.environ.get("DIFFUSIONDRIVE_ANCHOR_PATH", "")
         backbone_path = os.environ.get("DIFFUSIONDRIVE_BACKBONE_PATH", "")
+        noise_mode = os.environ.get("DIFFUSIONDRIVE_DIFFUSION_NOISE_MODE")
+        noise_seed_raw = os.environ.get("DIFFUSIONDRIVE_DIFFUSION_NOISE_SEED")
+        noise_seed = None
+        if noise_seed_raw is not None and noise_seed_raw != "":
+            try:
+                noise_seed = int(noise_seed_raw)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "DIFFUSIONDRIVE_DIFFUSION_NOISE_SEED must be an integer; "
+                    f"got {noise_seed_raw!r}."
+                ) from exc
 
         if not backbone_path:
             default_backbone = os.path.join(cwd or os.getcwd(), "pytorch_model.bin")
             if os.path.exists(default_backbone):
                 backbone_path = default_backbone
 
-        return cls(anchor_path=anchor_path, backbone_path=backbone_path)
+        return cls(
+            anchor_path=anchor_path,
+            backbone_path=backbone_path,
+            diffusion_infer_noise_mode=noise_mode,
+            diffusion_infer_noise_seed=noise_seed,
+        )
 
 
 def build_diffusiondrive_config(
@@ -40,6 +62,14 @@ def build_diffusiondrive_config(
         plan_anchor_path=overrides.anchor_path,
         bkb_path=overrides.backbone_path,
     )
+    if overrides.diffusion_infer_noise_mode is not None:
+        dd_config.diffusion_infer_noise_mode = normalize_diffusion_noise_mode(
+            overrides.diffusion_infer_noise_mode
+        )
+    if overrides.diffusion_infer_noise_seed is not None:
+        dd_config.diffusion_infer_noise_seed = validate_diffusion_noise_seed(
+            overrides.diffusion_infer_noise_seed
+        )
     if dd_config.plan_anchor_path and os.path.isfile(dd_config.plan_anchor_path):
         plan_anchor_shape = np.load(dd_config.plan_anchor_path, mmap_mode="r").shape
         if len(plan_anchor_shape) == 3:
@@ -161,3 +191,9 @@ def validate_diffusiondrive_config(config: DiffusionDriveConfig) -> None:
             f"got trunc={config.diffusion_infer_trunc_timesteps}, "
             f"num_train_timesteps={config.diffusion_num_train_timesteps}."
         )
+    config.diffusion_infer_noise_mode = normalize_diffusion_noise_mode(
+        config.diffusion_infer_noise_mode
+    )
+    config.diffusion_infer_noise_seed = validate_diffusion_noise_seed(
+        config.diffusion_infer_noise_seed
+    )

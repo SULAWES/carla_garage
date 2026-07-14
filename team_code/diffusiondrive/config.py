@@ -114,6 +114,8 @@ class DiffusionDriveConfig:
     diffusion_infer_step_num: int = 2
     diffusion_infer_timestep_span: int = 20
     diffusion_infer_trunc_timesteps: int = 8
+    diffusion_infer_noise_mode: str = "random"
+    diffusion_infer_noise_seed: int = 0
 
     # BEV mapping (not used for CARLA inference)
     bev_semantic_classes: Dict[int, Any] = field(default_factory=dict)

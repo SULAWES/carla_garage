@@ -448,6 +448,8 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
   --model-image-width 1024 \
   --image-normalization imagenet \
   --lidar-mode original \
+  --diffusion-noise-mode fixed \
+  --diffusion-noise-seed 0 \
   --batch-size 16 \
   --num-workers 6 \
   --device cuda:0 \
@@ -463,6 +465,28 @@ conda run -n ltr_garage_2 python tools/inspect_diffusiondrive_eval_errors.py \
 - `shuffle`：按 `--seed` 构造确定性的全数据集循环错配，每个样本使用另一个样本的 LiDAR；CSV 会记录 donor 的 sample index、scenario、route 和 frame。若 `shuffle` 与 `zero` 都优于 `original`，更支持当前 LiDAR 分支提供了有害信息；若 `shuffle` 明显差于 `zero`，则模型确实依赖 LiDAR，但输入语义或跨模态对齐可能不正确。
 
 三种模式应使用相同 checkpoint、manifest、sample 顺序和 seed，并分别写入不同 CSV；不要把三种模式混在同一输出文件。
+
+`--diffusion-noise-mode` 独立控制 diffusion trajectory head 的初始噪声：
+
+- `random`：保持历史行为，每次 forward 从全局 torch RNG 取新噪声。
+- `fixed`：用 `--diffusion-noise-seed` 生成一份 `[1,num_modes,num_poses,2]` template，再扩展到 batch；同一 seed 对所有样本相同，并且不依赖 batch size。
+- `zero`：使用全零初始噪声，只作分布外诊断，不能直接作为正式推理方案。
+- `seeded`：按 `base_seed + scenario + route + frame` 的稳定 hash 在 Dataset worker 中生成显式逐样本噪声；同一样本不受 batch size、worker 数和读取顺序影响。
+
+`--seed` 仍控制全局诊断 RNG 和 LiDAR shuffle donor；它不再代替 `--diffusion-noise-seed`。CSV 额外记录 noise mode/seed/key、最终 trajectory mode、top-2 mode/probability/endpoint、top-1 margin 和 normalized entropy。模型默认仍为 `random`，checkpoint tensor schema 不变。
+
+闭环可通过以下 env 使用同一 noise contract：
+
+```bash
+DIFFUSIONDRIVE_DIFFUSION_NOISE_MODE=fixed \
+DIFFUSIONDRIVE_DIFFUSION_NOISE_SEED=0 \
+DIFFUSIONDRIVE_DEBUG_TRAJECTORY=1 \
+DIFFUSIONDRIVE_TRAJECTORY_DEBUG_INTERVAL=1 \
+DIFFUSIONDRIVE_TRAJECTORY_JUMP_WARN=5 \
+bash tools/run_baseline_basic_closed_loop.sh
+```
+
+在线诊断默认写到 `${OUT}/trajectory_diagnostics/<route_timestamp_pid>/records.jsonl`。每条记录包含 mode/margin/entropy、noise key、ego state、top-2 endpoint，以及把上一 tick endpoint 对齐到当前 ego frame 后计算的 `aligned_endpoint_jump`。`seeded` 在线模式使用 `START_IDX + step` 作为稳定 key；要研究跨 tick mode flicker 时应优先使用 `fixed`。
 
 ## LiDAR Contract Inspection
 

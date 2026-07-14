@@ -21,6 +21,8 @@ Env vars:
   - DIFFUSIONDRIVE_ALLOW_PARTIAL_CHECKPOINT: allow missing/mismatched model tensors (default: 0).
   - DIFFUSIONDRIVE_ALLOW_PREPROCESS_MISMATCH: allow checkpoint preprocessing metadata mismatch (default: 0).
   - DIFFUSIONDRIVE_ZERO_LIDAR: replace LiDAR BEV with zeros for diagnostic ablation (default: 0).
+  - DIFFUSIONDRIVE_DIFFUSION_NOISE_MODE: random/fixed/zero/seeded inference noise (default: random).
+  - DIFFUSIONDRIVE_DIFFUSION_NOISE_SEED: fixed/seeded inference noise seed (default: 0).
   - DIFFUSIONDRIVE_COMMAND_DELAY: use the inherited one-command delay (default: 0).
   - DIFFUSIONDRIVE_SPATIAL_PID: use spatial-checkpoint speed logic (default: config value).
   - DIFFUSIONDRIVE_SPATIAL_PID_SPEED_FAST: override spatial PID fast target speed.
@@ -43,6 +45,10 @@ Env vars:
   - DIFFUSIONDRIVE_LIDAR_DUMP_MAX: maximum NPZ dumps per agent process (default: 50).
   - DIFFUSIONDRIVE_LIDAR_HISTORY_STEPS: recent diagnostic records kept for terminal/event context (default: 100).
   - DIFFUSIONDRIVE_LIDAR_DEBUG_DIR: optional output root; defaults to OUT/lidar_diagnostics.
+  - DIFFUSIONDRIVE_DEBUG_TRAJECTORY: write trajectory mode/noise diagnostics (default: 0).
+  - DIFFUSIONDRIVE_TRAJECTORY_DEBUG_INTERVAL: periodic trajectory record interval (default: 1).
+  - DIFFUSIONDRIVE_TRAJECTORY_JUMP_WARN: aligned endpoint jump event threshold in meters (default: 5).
+  - DIFFUSIONDRIVE_TRAJECTORY_DEBUG_DIR: optional output root; defaults to OUT/trajectory_diagnostics.
 """
 
 import json
@@ -76,6 +82,10 @@ from diffusiondrive.lidar_diagnostics import (
     make_json_safe,
 )
 from diffusiondrive.model import V2TransfuserModel
+from diffusiondrive.inference_diagnostics import (
+    gaussian_noise_from_seed,
+    stable_diffusion_noise_seed,
+)
 from diffusiondrive.status import build_status_feature
 from birds_eye_view.run_stop_sign import RunStopSign
 
@@ -198,10 +208,18 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.debug_safety_box = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_SAFETY_BOX", "0"))
         self.debug_control_interval = max(1, int(os.environ.get("DIFFUSIONDRIVE_DEBUG_INTERVAL", "20")))
         self.debug_lidar_contract = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_LIDAR_CONTRACT", "0"))
+        self.debug_trajectory = strtobool(os.environ.get("DIFFUSIONDRIVE_DEBUG_TRAJECTORY", "0"))
         self.lidar_debug_interval = max(1, env_int("DIFFUSIONDRIVE_LIDAR_DEBUG_INTERVAL", 20))
         self.lidar_dump_interval = max(0, env_int("DIFFUSIONDRIVE_LIDAR_DUMP_INTERVAL", 0))
         self.lidar_dump_max = max(0, env_int("DIFFUSIONDRIVE_LIDAR_DUMP_MAX", 50))
         self.lidar_history_steps = max(1, env_int("DIFFUSIONDRIVE_LIDAR_HISTORY_STEPS", 100))
+        self.trajectory_debug_interval = max(1, env_int("DIFFUSIONDRIVE_TRAJECTORY_DEBUG_INTERVAL", 1))
+        self.trajectory_jump_warn = env_float("DIFFUSIONDRIVE_TRAJECTORY_JUMP_WARN", 5.0)
+        if self.trajectory_jump_warn <= 0.0:
+            raise RuntimeError(
+                "DIFFUSIONDRIVE_TRAJECTORY_JUMP_WARN must be positive; "
+                f"got {self.trajectory_jump_warn}."
+            )
         self.route_debug_distance_warn = env_float("DIFFUSIONDRIVE_ROUTE_DEBUG_DISTANCE_WARN", 3.0)
         self.route_debug_angle_warn = env_float("DIFFUSIONDRIVE_ROUTE_DEBUG_ANGLE_WARN_DEG", 45.0)
         self.low_speed_steer = strtobool(os.environ.get("DIFFUSIONDRIVE_LOW_SPEED_STEER", "0"))
@@ -228,6 +246,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         print("DiffusionDrive route debug:", self.debug_route)
         print("DiffusionDrive safety-box debug:", self.debug_safety_box)
         print("DiffusionDrive LiDAR contract debug:", self.debug_lidar_contract)
+        print("DiffusionDrive trajectory debug:", self.debug_trajectory)
         print("DiffusionDrive zero LiDAR:", self.zero_lidar)
         print("DiffusionDrive route condition values:", self.use_route_condition)
         print("DiffusionDrive speed-head longitudinal control:", self.use_speed_head_controller)
@@ -243,6 +262,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         dd_overrides = DiffusionDriveRuntimeOverrides.from_environment()
         self.dd_config = build_diffusiondrive_config(self.config, dd_overrides)
         self._apply_runtime_model_overrides()
+        print(
+            "DiffusionDrive inference noise: "
+            f"mode={self.dd_config.diffusion_infer_noise_mode}, "
+            f"seed={self.dd_config.diffusion_infer_noise_seed}",
+            flush=True,
+        )
 
         # Build model
         self.model = V2TransfuserModel(self.dd_config).to(self.device)
@@ -250,6 +275,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         # Load weights
         ckpt_path = os.environ.get("DIFFUSIONDRIVE_CHECKPOINT", "")
+        self.checkpoint_path = ckpt_path
         if ckpt_path:
             self._load_checkpoint(ckpt_path)
         else:
@@ -308,6 +334,10 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         self.lidar_diagnostic_history = deque(maxlen=self.lidar_history_steps)
         self.lidar_diagnostic_writer = None
         self.last_lidar_event_step = {}
+        self.trajectory_diagnostic_handle = None
+        self.trajectory_diagnostic_path = None
+        self.last_trajectory_diagnostic = None
+        self.current_diffusion_noise_key = None
         if self.debug_lidar_contract:
             output_root_value = os.environ.get("DIFFUSIONDRIVE_LIDAR_DEBUG_DIR", "").strip()
             if output_root_value:
@@ -327,6 +357,49 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
                 f"dir={lidar_output_dir}, stats_interval={self.lidar_debug_interval}, "
                 f"dump_interval={self.lidar_dump_interval}, max_dumps={self.lidar_dump_max}, "
                 f"history={self.lidar_history_steps}",
+                flush=True,
+            )
+        if self.debug_trajectory:
+            output_root_value = os.environ.get("DIFFUSIONDRIVE_TRAJECTORY_DEBUG_DIR", "").strip()
+            if output_root_value:
+                output_root = Path(output_root_value)
+            else:
+                run_output = os.environ.get("OUT", "").strip()
+                output_root = (
+                    Path(run_output) / "trajectory_diagnostics"
+                    if run_output
+                    else Path("/tmp/diffusiondrive_trajectory_diagnostics")
+                )
+            route_index_value = os.environ.get("START_IDX", "unknown")
+            run_tag = (
+                f"route_{route_index_value}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                f"_pid_{os.getpid()}"
+            )
+            trajectory_output_dir = output_root / run_tag
+            trajectory_output_dir.mkdir(parents=True, exist_ok=True)
+            self.trajectory_diagnostic_path = trajectory_output_dir / "records.jsonl"
+            self.trajectory_diagnostic_handle = self.trajectory_diagnostic_path.open(
+                "w",
+                encoding="utf-8",
+                buffering=1,
+            )
+            metadata = {
+                "route_index": route_index_value,
+                "checkpoint": self.checkpoint_path,
+                "noise_mode": self.dd_config.diffusion_infer_noise_mode,
+                "noise_seed": self.dd_config.diffusion_infer_noise_seed,
+                "record_interval": self.trajectory_debug_interval,
+                "jump_warn_m": self.trajectory_jump_warn,
+            }
+            (trajectory_output_dir / "metadata.json").write_text(
+                json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
+            print(
+                "DiffusionDrive trajectory diagnostics: "
+                f"path={self.trajectory_diagnostic_path}, "
+                f"interval={self.trajectory_debug_interval}, "
+                f"jump_warn={self.trajectory_jump_warn}",
                 flush=True,
             )
 
@@ -1099,6 +1172,29 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
 
         return t_u.algin_lidar(lidar, pos_diff, rot_diff)
 
+    def _add_seeded_diffusion_noise(self, features):
+        self.current_diffusion_noise_key = None
+        if self.dd_config.diffusion_infer_noise_mode != "seeded":
+            return
+
+        self.current_diffusion_noise_key = stable_diffusion_noise_seed(
+            self.dd_config.diffusion_infer_noise_seed,
+            "carla_online",
+            os.environ.get("START_IDX", "unknown"),
+            self.step,
+        )
+        features["diffusion_noise"] = gaussian_noise_from_seed(
+            (
+                1,
+                self.dd_config.num_anchor_modes,
+                self.dd_config.trajectory_sampling.num_poses,
+                2,
+            ),
+            self.current_diffusion_noise_key,
+            device=self.device,
+            dtype=features["camera_feature"].dtype,
+        )
+
     @torch.inference_mode()
     def run_step(self, input_data, timestamp, sensors=None):  # pylint: disable=unused-argument
         self.step += 1
@@ -1181,6 +1277,7 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         }
         if self.use_route_condition:
             features['route_condition_feature'] = self._build_route_condition(tick_data)
+        self._add_seeded_diffusion_noise(features)
         outputs = self.model(features)
 
         traj = outputs['trajectory']
@@ -1189,6 +1286,12 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         waypoints = traj
 
         speed = tick_data['speed'].item()
+        self._maybe_record_trajectory_diagnostics(
+            outputs=outputs,
+            waypoints=waypoints,
+            speed=speed,
+            ego_state=(ego_x, ego_y, ego_theta),
+        )
         desired_speed_override = self._predicted_target_speed(outputs) if self.use_speed_head_controller else None
         steer, throttle, brake = self._control_pid(
             waypoints,
@@ -1398,6 +1501,86 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
             if dump_path is not None:
                 print(f"[DiffusionDriveLidarDump] path={dump_path}", flush=True)
 
+    def _maybe_record_trajectory_diagnostics(self, *, outputs, waypoints, speed, ego_state):
+        if not self.debug_trajectory:
+            return
+
+        mode_index = int(outputs["trajectory_mode_index"][0].item())
+        top2_index = outputs["trajectory_mode_top2_index"][0].detach().cpu().tolist()
+        top2_prob = outputs["trajectory_mode_top2_prob"][0].detach().float().cpu().tolist()
+        top2_endpoint = outputs["trajectory_mode_top2_endpoint"][0].detach().float().cpu().tolist()
+        endpoint = waypoints[0, -1].detach().float().cpu().tolist()
+        state = [float(value) for value in ego_state]
+
+        previous = self.last_trajectory_diagnostic
+        aligned_previous_endpoint = None
+        aligned_endpoint_jump = None
+        mode_changed = False
+        if previous is not None:
+            aligned = self.align_lidar(
+                np.asarray(
+                    [[previous["endpoint"][0], previous["endpoint"][1], 0.0]],
+                    dtype=np.float64,
+                ),
+                previous["ego_state"][0],
+                previous["ego_state"][1],
+                previous["ego_state"][2],
+                state[0],
+                state[1],
+                state[2],
+            )[0, :2]
+            aligned_previous_endpoint = aligned.tolist()
+            aligned_endpoint_jump = float(
+                np.linalg.norm(aligned - np.asarray(endpoint, dtype=np.float64))
+            )
+            mode_changed = mode_index != previous["mode_index"]
+
+        current = {
+            "ego_state": state,
+            "endpoint": [float(value) for value in endpoint],
+            "mode_index": mode_index,
+        }
+        self.last_trajectory_diagnostic = current
+
+        periodic = (self.step % self.trajectory_debug_interval) == 0
+        jump_event = (
+            aligned_endpoint_jump is not None
+            and aligned_endpoint_jump >= self.trajectory_jump_warn
+        )
+        if not periodic and not mode_changed and not jump_event:
+            return
+
+        record = make_json_safe(
+            {
+                "step": int(self.step),
+                "route_index": os.environ.get("START_IDX"),
+                "speed": float(speed),
+                "ego_state": state,
+                "noise_mode": self.dd_config.diffusion_infer_noise_mode,
+                "noise_seed": int(self.dd_config.diffusion_infer_noise_seed),
+                "noise_key": self.current_diffusion_noise_key,
+                "mode_index": mode_index,
+                "top2_index": [int(value) for value in top2_index],
+                "top2_prob": [float(value) for value in top2_prob],
+                "mode_margin": float(outputs["trajectory_mode_margin"][0].item()),
+                "mode_entropy": float(outputs["trajectory_mode_entropy"][0].item()),
+                "mode_entropy_normalized": float(
+                    outputs["trajectory_mode_entropy_normalized"][0].item()
+                ),
+                "top2_endpoint": top2_endpoint,
+                "endpoint": endpoint,
+                "aligned_previous_endpoint": aligned_previous_endpoint,
+                "aligned_endpoint_jump": aligned_endpoint_jump,
+                "mode_changed": mode_changed,
+                "jump_event": jump_event,
+                "command": getattr(self, "last_command_debug", {}),
+            }
+        )
+        line = json.dumps(record, separators=(",", ":"), sort_keys=True, allow_nan=False)
+        if self.trajectory_diagnostic_handle is not None:
+            self.trajectory_diagnostic_handle.write(line + "\n")
+        print("[DiffusionDriveTrajectory] " + line, flush=True)
+
     def _maybe_print_control_debug(self, speed, stop_for_stop_sign):
         if not self.debug_control or (self.step % self.debug_control_interval) != 0:
             return
@@ -1498,6 +1681,20 @@ class DiffusionDriveAgent(autonomous_agent.AutonomousAgent):
         AutonomousAgent only defines destroy(self). Override it here so cleanup
         works with both evaluator variants.
         """
+        trajectory_handle = getattr(self, "trajectory_diagnostic_handle", None)
+        if trajectory_handle is not None:
+            try:
+                trajectory_handle.flush()
+                trajectory_handle.close()
+                print(
+                    f"[DiffusionDriveTrajectory] records={self.trajectory_diagnostic_path}",
+                    flush=True,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                print(f"[DiffusionDriveTrajectory] failed to close diagnostics: {exc}", flush=True)
+            finally:
+                self.trajectory_diagnostic_handle = None
+
         writer = getattr(self, "lidar_diagnostic_writer", None)
         if writer is not None:
             try:

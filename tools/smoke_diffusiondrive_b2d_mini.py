@@ -37,6 +37,11 @@ from diffusiondrive.config_adapter import (  # noqa: E402
     build_diffusiondrive_config,
 )
 from diffusiondrive.model import V2TransfuserModel  # noqa: E402
+from diffusiondrive.inference_diagnostics import (  # noqa: E402
+    DIFFUSION_INFER_NOISE_MODES,
+    gaussian_noise_from_seed,
+    stable_diffusion_noise_seed,
+)
 
 
 def _first_nonzero_grad_norm(model: torch.nn.Module) -> float:
@@ -65,6 +70,12 @@ def main() -> None:
     parser.add_argument("--spatial-target-interval", type=float, default=1.0)
     parser.add_argument("--spatial-target-max-future-frames", type=int, default=120)
     parser.add_argument(
+        "--diffusion-noise-mode",
+        choices=DIFFUSION_INFER_NOISE_MODES,
+        default="random",
+    )
+    parser.add_argument("--diffusion-noise-seed", type=int, default=0)
+    parser.add_argument(
         "--anchor-path",
         default=os.environ.get(
             "DIFFUSIONDRIVE_ANCHOR_PATH",
@@ -88,7 +99,12 @@ def main() -> None:
     config = GlobalConfig()
     dd_config = build_diffusiondrive_config(
         config,
-        DiffusionDriveRuntimeOverrides(anchor_path=args.anchor_path, backbone_path=args.backbone_path),
+        DiffusionDriveRuntimeOverrides(
+            anchor_path=args.anchor_path,
+            backbone_path=args.backbone_path,
+            diffusion_infer_noise_mode=args.diffusion_noise_mode,
+            diffusion_infer_noise_seed=args.diffusion_noise_seed,
+        ),
     )
 
     annotation = load_annotation(route_dir, args.frame)
@@ -143,10 +159,48 @@ def main() -> None:
         loss = loss + (speed_loss * valid).sum() / valid_count
     loss.backward()
 
+    inference_features = dict(features)
+    if args.diffusion_noise_mode == "seeded":
+        noise_key = stable_diffusion_noise_seed(
+            args.diffusion_noise_seed,
+            route_dir.name,
+            args.frame,
+        )
+        inference_features["diffusion_noise"] = gaussian_noise_from_seed(
+            (
+                1,
+                dd_config.num_anchor_modes,
+                dd_config.trajectory_sampling.num_poses,
+                2,
+            ),
+            noise_key,
+            device=device,
+        )
+
+    model.eval()
+    with torch.inference_mode():
+        inference_output = model(inference_features)
+        repeated_max_abs_diff = None
+        if args.diffusion_noise_mode != "random":
+            repeated_output = model(inference_features)
+            repeated_max_abs_diff = float(
+                (inference_output["trajectory"] - repeated_output["trajectory"])
+                .abs()
+                .max()
+                .cpu()
+            )
+            if repeated_max_abs_diff > 1e-6:
+                raise RuntimeError(
+                    "Deterministic inference smoke produced different trajectories: "
+                    f"max_abs_diff={repeated_max_abs_diff}."
+                )
+
     print("mini_smoke_ok")
     print("route", args.route)
     print("frame", args.frame)
     print("target_mode", args.target_mode)
+    print("diffusion_noise_mode", args.diffusion_noise_mode)
+    print("diffusion_noise_seed", args.diffusion_noise_seed)
     print("device", device)
     print("camera_feature", tuple(features["camera_feature"].shape))
     print("lidar_feature", tuple(features["lidar_feature"].shape))
@@ -156,6 +210,15 @@ def main() -> None:
     print("target_speed_valid", int(speed_target["target_speed_label_valid"]))
     print("target_speed_class", int(speed_target["target_speed_class"]))
     print("output_trajectory", tuple(outputs["trajectory"].shape))
+    print("inference_trajectory", tuple(inference_output["trajectory"].shape))
+    print("inference_mode_index", int(inference_output["trajectory_mode_index"][0].cpu()))
+    print("inference_mode_margin", float(inference_output["trajectory_mode_margin"][0].cpu()))
+    print(
+        "inference_mode_entropy_normalized",
+        float(inference_output["trajectory_mode_entropy_normalized"][0].cpu()),
+    )
+    if repeated_max_abs_diff is not None:
+        print("inference_repeat_max_abs_diff", repeated_max_abs_diff)
     if "target_speed_logits" in outputs:
         print("target_speed_logits", tuple(outputs["target_speed_logits"].shape))
     print("loss", float(loss.detach().cpu()))

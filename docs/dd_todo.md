@@ -66,7 +66,8 @@
   - [x] 增加在线 LiDAR BEV dump / 统计：共享 schema 记录 point count / model 保留率 / z 分位数 / nonzero / channel mean/max / saturation / front-back-left-right occupancy，并拆分 `current_half`、`previous_half_aligned`、`full_scan`、`model_input`；事件和周期 dump 均有限频 / 上限
   - [x] 完成配对开环归因：original 显著优于 zero，zero 又优于 shuffle，排除“模型忽略 LiDAR”和“LiDAR 全局负贡献”
   - [x] 完成第一批 train-vs-online contract：full scan angular coverage 正常；确认前向动态物体点云晚一 tick，且密度/占用 drift 是场景相关而非固定 scale
-  - [ ] 第一优先增加确定性 diffusion inference：固定/zero/多 seed noise，并记录 trajectory mode、margin、entropy、endpoint；用多 seed 开环和重点 route 重复闭环量化 mode switching
+  - [x] 增加确定性 diffusion inference：支持 random/fixed/zero/seeded noise，记录 trajectory mode、top-2、margin、entropy 和 endpoint；在线 endpoint jump 会先做 ego-frame 对齐
+  - [ ] 用 fixed seed 0-4 跑开环，并对 route 24/50/139/153 做多 attempt 闭环，量化 mode switching 与 CARLA 随机性
   - [ ] 修复并验证低速停驻段 `spatial_path` target 的方向连续性，避免未来窗口末端微小位移触发长距离反向外推
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
   - [ ] 在随机性、target 连续性和 temporal/channel 归因完成后评估 LiDAR fusion gate / dropout，保留 LiDAR 输入并降低未校准分支的早期污染

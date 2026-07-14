@@ -142,7 +142,8 @@
   - [x] 实现共享 LiDAR BEV contract 统计 / dump，对比 B2D `.laz -> histogram` 与 online `half-scan concat -> histogram` 的点数、保留率、z 分位数、非零率、通道均值 / 饱和率和左右前后 occupancy
   - [x] 完成 `39,432` 样本配对开环：original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，确认模型在 B2D raw 上正确利用 LiDAR，而不是忽略该分支
   - [x] 完成第一批 online contract 对比：拼接 full scan angular coverage 正常；主要剩余问题是前向动态点云晚一 tick，以及 route 153 等场景的 density/occupancy drift
-  - [ ] 增加确定性 diffusion inference 入口：`random/fixed/zero/seeded` noise，输出 mode、top-1/top-2 margin、entropy 和 endpoint；先做 5-seed 开环与重点 route 重复闭环
+  - [x] 增加确定性 diffusion inference 入口：`random/fixed/zero/seeded` noise，输出 mode、top-1/top-2 margin、entropy 和 endpoint；fixed 不依赖 batch size，seeded 按稳定 sample key 生成显式 noise
+  - [ ] 运行 5-seed all-scenarios 开环与 route 24/50/139/153 重复闭环，量化跨 seed tail overlap、mode switching 和 CARLA attempt 方差
   - [ ] 修复 `spatial_path` 在低速停驻和未来路径不足时的外推方向不连续；重建 manifest 并复核相邻 target endpoint jump
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
   - [ ] 在确定性推理、target 连续性和 channel/temporal 归因后，评估 LiDAR fusion gate / dropout full retrain，避免把多个问题混入一次训练

@@ -39,6 +39,12 @@ from diffusiondrive.config_adapter import (  # noqa: E402
     build_diffusiondrive_config,
 )
 from diffusiondrive.model import V2TransfuserModel  # noqa: E402
+from diffusiondrive.inference_diagnostics import (  # noqa: E402
+    DIFFUSION_INFER_NOISE_MODES,
+    gaussian_noise_from_seed,
+    normalize_diffusion_noise_mode,
+    stable_diffusion_noise_seed,
+)
 
 
 class IndexedDataset(Dataset):
@@ -48,9 +54,17 @@ class IndexedDataset(Dataset):
         *,
         lidar_mode: str = "original",
         seed: int = 0,
+        diffusion_noise_mode: str = "random",
+        diffusion_noise_seed: int = 0,
+        diffusion_noise_shape: tuple[int, ...] | None = None,
     ) -> None:
         self.dataset = dataset
         self.lidar_mode = lidar_mode
+        self.diffusion_noise_mode = normalize_diffusion_noise_mode(diffusion_noise_mode)
+        self.diffusion_noise_seed = int(diffusion_noise_seed)
+        self.diffusion_noise_shape = diffusion_noise_shape
+        if self.diffusion_noise_mode == "seeded" and self.diffusion_noise_shape is None:
+            raise RuntimeError("Seeded diffusion noise requires diffusion_noise_shape.")
         self.lidar_shuffle_offset = 0
         if lidar_mode == "shuffle":
             if len(dataset) < 2:
@@ -76,6 +90,20 @@ class IndexedDataset(Dataset):
                 self.dataset.config,
             )
         item["lidar_donor_index"] = donor_index
+        diffusion_noise_key = -1
+        if self.diffusion_noise_mode == "seeded":
+            route_dir, frame = self.dataset.samples[index]
+            diffusion_noise_key = stable_diffusion_noise_seed(
+                self.diffusion_noise_seed,
+                route_dir.parent.name,
+                route_dir.name,
+                int(frame),
+            )
+            item["features"]["diffusion_noise"] = gaussian_noise_from_seed(
+                self.diffusion_noise_shape,
+                diffusion_noise_key,
+            )
+        item["diffusion_noise_key"] = diffusion_noise_key
         return item
 
 
@@ -93,7 +121,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Global diagnostic seed and LiDAR shuffle seed; independent of diffusion noise seed.",
+    )
+    parser.add_argument(
+        "--diffusion-noise-mode",
+        choices=DIFFUSION_INFER_NOISE_MODES,
+        default="random",
+        help=(
+            "Initial diffusion noise policy. fixed reuses one seeded template for every sample; "
+            "seeded derives explicit per-sample noise from scenario/route/frame."
+        ),
+    )
+    parser.add_argument(
+        "--diffusion-noise-seed",
+        type=int,
+        default=0,
+        help="Seed used only by fixed/seeded diffusion inference noise.",
+    )
     parser.add_argument(
         "--lidar-mode",
         choices=("original", "zero", "shuffle"),
@@ -185,6 +233,8 @@ def sample_records(
     device: torch.device,
     max_steps: int | None,
     lidar_mode: str,
+    diffusion_noise_mode: str,
+    diffusion_noise_seed: int,
 ) -> Iterator[dict[str, Any]]:
     model.eval()
     with torch.no_grad():
@@ -197,9 +247,19 @@ def sample_records(
             l1 = torch.abs(prediction - target).mean(dim=(1, 2))
             ade = torch.linalg.norm(prediction - target, dim=-1).mean(dim=1)
             fde = torch.linalg.norm(prediction[:, -1] - target[:, -1], dim=-1)
+            mode_index = outputs["trajectory_mode_index"].detach().cpu()
+            mode_top2_index = outputs["trajectory_mode_top2_index"].detach().cpu()
+            mode_top2_prob = outputs["trajectory_mode_top2_prob"].detach().float().cpu()
+            mode_margin = outputs["trajectory_mode_margin"].detach().float().cpu()
+            mode_entropy = outputs["trajectory_mode_entropy"].detach().float().cpu()
+            mode_entropy_normalized = (
+                outputs["trajectory_mode_entropy_normalized"].detach().float().cpu()
+            )
+            mode_top2_endpoint = outputs["trajectory_mode_top2_endpoint"].detach().float().cpu()
 
             indices = batch["index"].tolist()
             donor_indices = batch["lidar_donor_index"].tolist()
+            diffusion_noise_keys = batch["diffusion_noise_key"].tolist()
             for row, sample_index in enumerate(indices):
                 route_dir, frame = dataset.samples[int(sample_index)]
                 donor_index = int(donor_indices[row])
@@ -224,6 +284,25 @@ def sample_records(
                     "lidar_donor_scenario": donor_scenario,
                     "lidar_donor_route": donor_route,
                     "lidar_donor_frame": donor_frame_value,
+                    "diffusion_noise_mode": diffusion_noise_mode,
+                    "diffusion_noise_seed": diffusion_noise_seed,
+                    "diffusion_noise_key": (
+                        int(diffusion_noise_keys[row])
+                        if int(diffusion_noise_keys[row]) >= 0
+                        else None
+                    ),
+                    "trajectory_mode": int(mode_index[row]),
+                    "trajectory_mode_top1": int(mode_top2_index[row, 0]),
+                    "trajectory_mode_top2": int(mode_top2_index[row, 1]),
+                    "trajectory_mode_top1_prob": float(mode_top2_prob[row, 0]),
+                    "trajectory_mode_top2_prob": float(mode_top2_prob[row, 1]),
+                    "trajectory_mode_margin": float(mode_margin[row]),
+                    "trajectory_mode_entropy": float(mode_entropy[row]),
+                    "trajectory_mode_entropy_normalized": float(mode_entropy_normalized[row]),
+                    "trajectory_top1_end_x": float(mode_top2_endpoint[row, 0, 0]),
+                    "trajectory_top1_end_y": float(mode_top2_endpoint[row, 0, 1]),
+                    "trajectory_top2_end_x": float(mode_top2_endpoint[row, 1, 0]),
+                    "trajectory_top2_end_y": float(mode_top2_endpoint[row, 1, 1]),
                     "l1": float(l1[row].cpu()),
                     "ade": float(ade[row].cpu()),
                     "fde": float(fde[row].cpu()),
@@ -263,6 +342,15 @@ def print_summary(records: list[dict[str, Any]]) -> None:
             f"p90={percentile(values, 0.90):.4f} p95={percentile(values, 0.95):.4f} max={max(values):.4f}",
             flush=True,
         )
+    margins = [float(record["trajectory_mode_margin"]) for record in records]
+    entropies = [float(record["trajectory_mode_entropy_normalized"]) for record in records]
+    print(
+        "trajectory_mode: "
+        f"margin_mean={mean(margins):.4f} margin_p10={percentile(margins, 0.10):.4f} "
+        f"entropy_normalized_mean={mean(entropies):.4f} "
+        f"entropy_normalized_p95={percentile(entropies, 0.95):.4f}",
+        flush=True,
+    )
 
 
 def print_top(records: list[dict[str, Any]], top_k: int) -> None:
@@ -296,7 +384,12 @@ def main() -> None:
     global_config = GlobalConfig()
     dd_config = build_diffusiondrive_config(
         global_config,
-        DiffusionDriveRuntimeOverrides(anchor_path=args.anchor_path, backbone_path=args.backbone_path),
+        DiffusionDriveRuntimeOverrides(
+            anchor_path=args.anchor_path,
+            backbone_path=args.backbone_path,
+            diffusion_infer_noise_mode=args.diffusion_noise_mode,
+            diffusion_infer_noise_seed=args.diffusion_noise_seed,
+        ),
     )
     dd_config.camera_height = args.model_image_height
     dd_config.camera_width = args.model_image_width
@@ -322,7 +415,18 @@ def main() -> None:
         sample_manifest_path=args.sample_manifest,
         skip_first_frames=args.skip_first_frames,
     )
-    indexed_dataset = IndexedDataset(dataset, lidar_mode=args.lidar_mode, seed=args.seed)
+    indexed_dataset = IndexedDataset(
+        dataset,
+        lidar_mode=args.lidar_mode,
+        seed=args.seed,
+        diffusion_noise_mode=args.diffusion_noise_mode,
+        diffusion_noise_seed=args.diffusion_noise_seed,
+        diffusion_noise_shape=(
+            dd_config.num_anchor_modes,
+            dd_config.trajectory_sampling.num_poses,
+            2,
+        ),
+    )
     dataloader = DataLoader(
         indexed_dataset,
         batch_size=args.batch_size,
@@ -334,6 +438,12 @@ def main() -> None:
     print(f"Samples: {len(dataset)}", flush=True)
     print(f"Scenario samples: {dataset.scenario_sample_counts}", flush=True)
     print(f"LiDAR mode: {args.lidar_mode}", flush=True)
+    print(
+        "Diffusion noise: "
+        f"mode={dd_config.diffusion_infer_noise_mode}, "
+        f"seed={dd_config.diffusion_infer_noise_seed}",
+        flush=True,
+    )
     if args.lidar_mode == "shuffle":
         print(f"LiDAR shuffle offset: {indexed_dataset.lidar_shuffle_offset}", flush=True)
 
@@ -348,6 +458,8 @@ def main() -> None:
             device=device,
             max_steps=args.max_steps,
             lidar_mode=args.lidar_mode,
+            diffusion_noise_mode=args.diffusion_noise_mode,
+            diffusion_noise_seed=args.diffusion_noise_seed,
         )
     )
     print_summary(records)

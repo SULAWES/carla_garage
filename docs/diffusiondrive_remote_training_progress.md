@@ -510,3 +510,5 @@ L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_
 另一个独立问题是 spatial target / prediction 的时序跳变。在 `37,101` 个相邻 transition 中，target endpoint jump `>5m` 占 `3.43%`，其中 `95.67%` 同时触发 original prediction jump `>5m`；`170` 个大跳变发生在低速且 route condition 基本不变时。当前 target 路径不足会沿最后有效线段外推，长时间静止时微小位移方向可能翻转。与此同时，`TrajectoryHead.forward_test()` 每次 forward 使用新的随机初始噪声，可能引入 mode switching。
 
 因此下一步顺序修正为：先实现固定/zero/多 seed diffusion noise 与 mode/margin 日志，确认随机推理对灾难分叉的贡献；并行修复 spatial target 连续性；随后再做 online half-scan temporal/channel ablation。fusion gate/dropout 和 auxiliary supervision 放在上述归因稳定之后。完整记录见 `docs/diffusiondrive_lidar_diagnostics_20260715.md`。
+
+同日已完成确定性推理入口：模型支持 `random/fixed/zero/seeded` noise，开环 CSV 输出 mode/top-2/margin/entropy/endpoint，在线 agent 写独立 trajectory JSONL 并在比较 endpoint 前做 ego-frame 对齐。本地 fixed/seeded mini 重复推理均得到 `max_abs_diff=0.0`；远端 fixed seed 0-4 与 route 24/50/139/153 多 attempt 尚待运行。

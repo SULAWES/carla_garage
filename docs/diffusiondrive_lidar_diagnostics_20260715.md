@@ -94,9 +94,17 @@ route 167/185 的本次 contract run 与原 C2 结果相比已不再出现相同
 
 ## 下一步顺序
 
-1. **先做确定性推理诊断。** 支持 `random/fixed/zero/seeded` 初始 diffusion noise，记录最终 mode、top-1/top-2 margin、entropy 和 endpoint；用 5 个固定 seed 重跑开环，并对 route 24/50/139/153 做重复闭环。先回答灾难性分叉是否随 seed/mode 切换。
+1. **先做确定性推理诊断。** `random/fixed/zero/seeded` 初始 diffusion noise 和最终 mode/top-2/margin/entropy/endpoint 入口已实现；下一步用 5 个 fixed seed 重跑开环，并对 route 24/50/139/153 做重复闭环，回答灾难性分叉是否随 seed/mode 切换。
 2. **修复并重建 spatial target。** 对低速停驻段引入稳定方向来源和连续性检查，禁止用窗口末端微小位移直接决定 11.5m 外推方向；重建 manifest 后重新统计 target jump。
 3. **再做 online temporal LiDAR 诊断。** 优先比较当前 half-scan concat、仅当前 half、对动态区域降权等方案；同时做 above/below channel ablation。
 4. **最后进入训练结构改造。** 在归因稳定后评估 conservative fusion gate、受控 modality dropout 和 BEV/agent auxiliary supervision。此时再决定是否需要 density alignment 或新 LiDAR backbone。
 
 进入 fusion full retrain 的门槛是：固定 seed 下灾难样本可复现、target jump 已显著下降，并且至少一个 LiDAR channel/temporal ablation 能稳定解释 route-level 改善。否则新结构会把多个问题混在一次昂贵重训中。
+
+### 确定性推理实现状态
+
+- `fixed` 使用局部 `torch.Generator` 每次重建同一 batch-invariant template，不消耗全局 RNG。
+- `seeded` 只接受显式 `features["diffusion_noise"]`；开环按 scenario/route/frame、在线按 route/step 生成稳定 key，避免静默依赖调用顺序。
+- 默认 `random` 保持旧行为；新增输出均为无参数诊断 tensor，不改变 checkpoint strict-load contract。
+- 在线 `records.jsonl` 会先把上一 tick endpoint 对齐到当前 ego frame，再判断 `>5m` jump。
+- 本地 mini fixed/seeded 两种模式均完成 forward/loss/backward，并在重复 inference 中得到 `max_abs_diff=0.0`。远端 5-seed 与重点 route 结果仍待运行。

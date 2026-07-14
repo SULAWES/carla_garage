@@ -839,7 +839,7 @@ notes:
 
 ## 当前推荐优先级
 
-1. 先实现确定性 diffusion inference：支持 fixed/zero/多 seed 初始 noise，记录 trajectory mode、top-1/top-2 margin、entropy 和 endpoint；跑 5-seed 配对开环，并对 route 24/50/139/153 做重复闭环。
+1. 确定性 diffusion inference 入口已实现：支持 fixed/zero/seeded noise，记录 trajectory mode、top-2/margin/entropy 和对齐后的 endpoint jump；下一步跑 fixed seed 0-4 配对开环，并对 route 24/50/139/153 做重复闭环。
 2. 修复 `spatial_path` 在低速停驻和 future path 不足时的方向外推，重建 manifest，并要求相邻 target endpoint 大跳变显著下降。
 3. 随后做 online half-scan temporal 与 above/below channel ablation；优先验证前向上一 tick 动态点云是否导致交互场景退化。
 4. 只有归因稳定后再做 conservative LiDAR fusion gate、受控 dropout 和 BEV/agent auxiliary supervision full retrain；no/zero-LiDAR 只保留为诊断上界。
