@@ -79,6 +79,15 @@ B2D Full 原生格式：
 
 二者统计 raw / finite / in-BEV / below-split / above-split / model point count，z 分位数，front/back/left/right occupancy，以及 BEV nonzero / mean / max / saturation 和逐通道汇总。先比较分布，再决定是否修改坐标、过滤或融合；不要只凭单张 BEV 图判断 contract。
 
+## 2026-07-15 实测结论
+
+- B2D full scan 与 online `current_half + previous_half_aligned` 拼接 full scan 的 1-degree angular coverage median 均为 `100%`，未发现 gross yaw 或半扫描遗漏。
+- online `current_half` angular coverage median 为 `50.28%`，`previous_half_aligned` 为 `52.78%`。当前 half 主要覆盖后向，前向区域主要来自上一 tick；静态 SE(2) alignment 无法补偿移动 actor 的时间差。
+- train-vs-online density/occupancy drift 是场景相关的，不是一个固定 scale。route 153 在失败前 model points/occupancy/BEV mean 达到训练匹配场景的约 `1.80x/3.07x/2.49x`，但 route 139 在 `3.29x/1.22x/1.75x` 下仍完成；route 50 约为 `0.91x/1.04x/1.03x` 仍发生碰撞。
+- `original/zero/shuffle` 的 `39,432` 个配对开环样本中，mean L1 分别为 `0.02047/0.31397/0.58965`。正确 LiDAR 显著优于 zero 和错配 LiDAR，证明模型在 B2D raw 分布上正确使用 LiDAR。
+
+所以当前 contract 结论是：没有明显全局角度错误，但存在前向动态点云晚一 tick 和场景相关的密度/占用漂移。它们值得修复，却不能单独解释所有闭环分叉。详细数据见 `diffusiondrive_lidar_diagnostics_20260715.md`。
+
 ## 已知 Gap
 
 B2D Full raw sensor 和在线 garage sensor suite 不完全一致：
@@ -146,7 +155,7 @@ anchor 估计语义：
 
 1. full baseline-basic 已完成，B2D Full raw + scenario-balanced manifest 能支持全量训练，且 open-loop all-scenarios `l1_mean=0.0192`。
 2. 当前 closed-loop Bench2Drive 220 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明仅靠 B2D Full open-loop 轨迹误差不能保证闭环表现。
-3. 后续应抽样对比 raw image、preprocessed image、LiDAR BEV、target trajectory 和在线闭环失败帧，重点排查 route deviation / blocked / collisions 与 sensor contract gap 的关系。
-4. `baseline-condition-v1` 已加入 `SpeedHead-v1` 和 `route_condition_token`，下一步应先重训并检查 open-loop trajectory / speed metrics，再跑 20-route 闭环。
-5. 针对空间 checkpoint target，推理侧仍保留空间 PID fallback；`DIFFUSIONDRIVE_USE_SPEED_HEAD=1` 可切到 predicted-speed longitudinal controller。
-6. 若在线闭环性能受 sensor gap 影响，再单独决定推理 sensor contract 是否向 B2D Full raw 对齐，或是否加入显式 domain adaptation / finetune。
+3. condition-v1 full retrain、C2/L1 20-route、配对开环和第一批 online contract 统计均已完成。当前不能继续把问题简化为“LiDAR 负贡献”。
+4. 第一优先是固定/zero/多 seed diffusion inference，并记录 mode、top-1/top-2 margin、entropy 与 endpoint，先量化闭环灾难性分叉中的推理随机性。
+5. 并行修复 `spatial_path` 在低速停驻、未来路径不足时的外推方向连续性；重建 manifest 后要求 target endpoint jump 显著下降。
+6. 完成以上归因后，再比较 half-scan temporal 方案和 above/below channel；只有稳定收益出现后才进入 fusion gate/dropout 或 auxiliary-supervision full retrain。

@@ -2,14 +2,14 @@
 
 本文档记录基于当前代码状态整理出的 `DiffusionDriveAgent` 后续事项。格式参考旧版 `diffusiondrive_claude.md`，但结论以现在的实现为准。
 
-**更新日期**: 2026-07-09
+**更新日期**: 2026-07-15
 **判断基线**:
 
 - 当前代码状态以 `carla_garage/team_code/diffusiondrive_agent.py` 为准
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
 - 当前模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder；syb 常用的 `regnety_032` 是 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain
-- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box；Z0/Z1 和 condition-v1 L0/L1 诊断变好说明当前模型侧 LiDAR BEV 接入不稳定。L1 `DS=50.77/RC=88.97/NDS=34.95` 是目前 condition-v1 最强 20-route 候选，但同时改了 A9 PID 和 zero model-LiDAR，因此还需补 `condition-v1 + A9 PID + LiDAR ON` 对照。项目要求使用 LiDAR，zero/no-LiDAR 只作为诊断上界，正式主线应修复 LiDAR contract / fusion / supervision
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。C2/L1 对照已完成；后续 `39,432` 样本配对开环显示 original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，证明模型在 B2D raw 上正确使用 LiDAR。online full scan 未发现 gross yaw/覆盖错误，但前向动态点云晚一 tick、density drift 场景相关。正式主线保留 LiDAR，先排除 diffusion inference 随机性和 spatial target 不连续，再做 channel/fusion/supervision
 - 需要区分两套机制：
 - `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
@@ -64,8 +64,12 @@
   - [x] 记录 condition-v1 L1 zero model-LiDAR 诊断：A9 PID full20 `DS=50.77 / RC=88.97 / NDS=34.95`，当前最强 condition-v1 候选，但需要 A9 LiDAR-on 对照拆分收益来源
   - [x] 补 `condition-v1 + A9 PID + LiDAR ON` 固定 20-route C2 对照：20/20 有效，`DS=41.00 / RC=94.40 / IP=0.422 / NDS=19.56`；同 A9 下 zero-LiDAR 的 L1 为 `50.77 / 88.97 / 0.544 / 34.95`，确认 LiDAR 分支有效但局部安全 / penalty 贡献高度不稳定
   - [x] 增加在线 LiDAR BEV dump / 统计：共享 schema 记录 point count / model 保留率 / z 分位数 / nonzero / channel mean/max / saturation / front-back-left-right occupancy，并拆分 `current_half`、`previous_half_aligned`、`full_scan`、`model_input`；事件和周期 dump 均有限频 / 上限
+  - [x] 完成配对开环归因：original 显著优于 zero，zero 又优于 shuffle，排除“模型忽略 LiDAR”和“LiDAR 全局负贡献”
+  - [x] 完成第一批 train-vs-online contract：full scan angular coverage 正常；确认前向动态物体点云晚一 tick，且密度/占用 drift 是场景相关而非固定 scale
+  - [ ] 第一优先增加确定性 diffusion inference：固定/zero/多 seed noise，并记录 trajectory mode、margin、entropy、endpoint；用多 seed 开环和重点 route 重复闭环量化 mode switching
+  - [ ] 修复并验证低速停驻段 `spatial_path` target 的方向连续性，避免未来窗口末端微小位移触发长距离反向外推
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
-  - [ ] 评估 LiDAR fusion gate / dropout：保留 LiDAR 输入，但降低未校准 BEV 分支对 image feature 的早期污染
+  - [ ] 在随机性、target 连续性和 temporal/channel 归因完成后评估 LiDAR fusion gate / dropout，保留 LiDAR 输入并降低未校准分支的早期污染
   - [ ] 若继续出现负贡献，优先补 `bev_semantic_map`、`agent_states`、`agent_labels` 等辅助监督，而不是把 zero-LiDAR 当正式方案
   - [ ] 人工检查 `lidar_bev_v9_batch_100_1` 的 contact sheet，确认近场 `0-8m` raw IoU 退化主要来自动态目标、遮挡还是 scorer 偏置
   - [ ] 当前优先级高于 no-LiDAR final 方案；no-LiDAR / zero-LiDAR 只能作为诊断对照，若后续重启多帧 BEV，再考虑下一版 scorer 加入近场 `0-8m` raw/dynamic 一致性约束并用 batch_100 对比 v5/v9

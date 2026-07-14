@@ -2,7 +2,7 @@
 
 本文档记录面向后续 CARLA 训练的事项。格式参考 `dd_todo.md`，但关注点从“当前推理 agent 还缺什么”切换为“训练和训练后闭环需要先定义和验证什么”。
 
-**更新日期**: 2026-07-09
+**更新日期**: 2026-07-15
 **判断基线**:
 
 - 当前计划是在 CARLA 上重新训练 DiffusionDrive
@@ -10,7 +10,7 @@
 - full `baseline-basic` 已在远端使用 4 卡 L40 / DDP 完成训练：B2D Full scenario-balanced 全量 manifest、`epochs=100`、per-GPU `batch_size=64`、global batch `256`、`lr=6e-4`、`image_encoder_lr_mult=0.5`、无 hard-case weighting、无 Stage5/6 tuned checkpoint 初始化
 - baseline-basic 开环 / 闭环结果已完成并下载到本地 `dd_logs` 镜像路径；open-loop six-scene `l1_mean=0.0092`，all-scenarios `l1_mean=0.0192`，Bench2Drive 220 closed-loop `DS=44.81`、`RC=79.48`、`NDS=35.52`
 - baseline-basic 已完成一组 20-route 闭环 A/B；当前最明显正向方向是空间 PID 速度参数，`A8_pid_6_2p5` 更均衡，`A9_pid_7_3` DS/NDS 最高但 collision / timeout 风险更高
-- 20-route Z0/Z1 以及 condition-v1 L0/L1 zero-LiDAR 诊断显示当前模型侧 LiDAR BEV 接入不稳定：L1 `DS=50.77/RC=88.97/NDS=34.95` 是目前 condition-v1 最强 20-route 候选，但它同时改了 A9 PID 和 zero model-LiDAR；zero-LiDAR 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。项目要求使用 LiDAR，因此 no-LiDAR / zero-LiDAR 只能作为诊断上界，下一步应补 `condition-v1 + A9 PID + LiDAR ON` 对照，并优先验证 train-vs-online LiDAR BEV contract、做 channel ablation，补 LiDAR fusion gate / dropout 与 auxiliary supervision
+- condition-v1 C2/L1 对照、`original/zero/shuffle` 配对开环和第一批 train-vs-online contract 已完成：正确 LiDAR 在 B2D raw 上显著优于 zero/shuffle，online full scan 无 gross yaw/覆盖错误，但前向动态点云晚一 tick 且密度漂移场景相关。当前先排除随机 diffusion mode switching 和 `spatial_path` target 不连续，再做 channel/fusion 结构改造；zero-LiDAR 仍只作为诊断上界
 - 训练文档同时覆盖训练前定义、训练中实验项、训练后闭环验证项
 - 需要区分 `status_feature` 和 `extra_sensors` 两套输入机制
 - 当前 `DiffusionDriveAgent` 显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
@@ -140,8 +140,12 @@
   - [x] 把 no-LiDAR / zero-LiDAR 定位为诊断上界，而不是正式主线；项目最终路线仍应使用 LiDAR
   - [x] `inspect_diffusiondrive_eval_errors.py` 支持 `--lidar-mode original|zero|shuffle`，并在 shuffle CSV 中记录确定性 donor 样本，用于同一 checkpoint / manifest 的开环 LiDAR 归因
   - [x] 实现共享 LiDAR BEV contract 统计 / dump，对比 B2D `.laz -> histogram` 与 online `half-scan concat -> histogram` 的点数、保留率、z 分位数、非零率、通道均值 / 饱和率和左右前后 occupancy
+  - [x] 完成 `39,432` 样本配对开环：original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，确认模型在 B2D raw 上正确利用 LiDAR，而不是忽略该分支
+  - [x] 完成第一批 online contract 对比：拼接 full scan angular coverage 正常；主要剩余问题是前向动态点云晚一 tick，以及 route 153 等场景的 density/occupancy drift
+  - [ ] 增加确定性 diffusion inference 入口：`random/fixed/zero/seeded` noise，输出 mode、top-1/top-2 margin、entropy 和 endpoint；先做 5-seed 开环与重点 route 重复闭环
+  - [ ] 修复 `spatial_path` 在低速停驻和未来路径不足时的外推方向不连续；重建 manifest 并复核相邻 target endpoint jump
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
-  - [ ] 评估 LiDAR fusion gate / dropout full retrain：保留 LiDAR 输入，但避免未校准 LiDAR BEV 在 backbone early fusion 中污染视觉特征
+  - [ ] 在确定性推理、target 连续性和 channel/temporal 归因后，评估 LiDAR fusion gate / dropout full retrain，避免把多个问题混入一次训练
   - [ ] 补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision，让 LiDAR 分支学习可解释的近场几何 / 动态体语义，而不是只靠 trajectory loss 间接学习
   - [ ] 如继续对齐 syb，再评估 `regnety_032` full retrain；不要只把当前 ResNet34 checkpoint warm-start 到 RegNet
   - [ ] 验证 raw Bench2Drive LiDAR `x=-0.39,z=1.84,yaw=0,range=85` 与 garage 在线 LiDAR `x=0,z=2.5,yaw=-90` 的训练/推理 gap

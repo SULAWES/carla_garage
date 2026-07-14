@@ -484,3 +484,29 @@ L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_
 - C2 相对 L1 的 raw event 为 vehicle collision `20 vs 17`、layout collision `5 vs 4`、outside-lane `10 vs 6`、min-speed `44 vs 35`、vehicle-blocked `5 vs 3`；stuck / safety-stop 也从 `783/8132` 升到 `2834/10268`。
 - 逐 route 配对中 C2 对 L1 为 `8` 胜 `12` 负，DS 中位差只有 `-0.93`，但 route `50/94/153/167/185` 出现 `-37.26/-38.22/-67.89/-44.33/-32.21` 的灾难性分叉；route `139` 则反向提升 `+46.23`。稳定 route `00/04/24/212` 基本一致，说明 LiDAR 分支不是被模型忽略，而是在少数交互场景中产生强且不稳定的影响。
 - 当前结论不是“LiDAR 一律有害”：LiDAR-on 将 failed route-deviation 从 `5` 降到 `0`，并把 completed 从 `12` 提到 `16`；但它显著恶化局部安全 / 处罚质量。项目要求保留 LiDAR，下一步应先用已实现的 train-vs-online contract dump 和 `original/zero/shuffle` 开环归因定位分布 / fusion 问题，再做 channel ablation、fusion gate / dropout 和 auxiliary supervision。
+
+### Paired open-loop and online LiDAR contract diagnostics (2026-07-15)
+
+已拉取并分析：
+
+```text
+/share/home/u19666033/ltr/dd_logs/lidar_diagnostics/b2d_train_4096
+/share/home/u19666033/ltr/dd_logs/lidar_diagnostics/c2_online_contract
+/share/home/u19666033/ltr/dd_logs/lidar_diagnostics/openloop_ablation
+```
+
+`original/zero/shuffle` 各有 `39,432` 个严格配对样本。结果为：
+
+| LiDAR mode | Mean L1 | Mean ADE | Mean FDE |
+|---|---:|---:|---:|
+| `original` | 0.02047 | 0.03211 | 0.05227 |
+| `zero` | 0.31397 | 0.50525 | 0.86122 |
+| `shuffle` | 0.58965 | 0.95248 | 1.64013 |
+
+`original` 在 `91.50%` 的样本上优于 `zero`，在 `95.91%` 上优于 `shuffle`；39 个 scenario 的 original-zero 差值全部为负。由此确认模型在 B2D raw 分布上强依赖且正确使用 LiDAR，不能把 C2 闭环差异解释为“LiDAR 没学到”或“LiDAR 全局有害”。
+
+在线 angle contract 没发现 gross yaw / half-scan 缺失：B2D full scan 和 online 拼接 full scan 的 1-degree angular coverage median 都是 `100%`。但 online 前向区域主要来自上一 tick，当前 half 主要覆盖后向区域；这会让移动 actor 的前向点云天然晚一 tick。场景匹配统计还显示 density/occupancy drift 高度场景相关：route 153 在失败前 model points / occupancy / BEV mean 分别约为训练分布的 `1.80x/3.07x/2.49x`，但 route 139 在 `3.29x/1.22x/1.75x` 下仍以 DS 96.02 完成，route 50 几乎匹配仍发生碰撞。contract drift 是因素，但不是单调充分解释。
+
+另一个独立问题是 spatial target / prediction 的时序跳变。在 `37,101` 个相邻 transition 中，target endpoint jump `>5m` 占 `3.43%`，其中 `95.67%` 同时触发 original prediction jump `>5m`；`170` 个大跳变发生在低速且 route condition 基本不变时。当前 target 路径不足会沿最后有效线段外推，长时间静止时微小位移方向可能翻转。与此同时，`TrajectoryHead.forward_test()` 每次 forward 使用新的随机初始噪声，可能引入 mode switching。
+
+因此下一步顺序修正为：先实现固定/zero/多 seed diffusion noise 与 mode/margin 日志，确认随机推理对灾难分叉的贡献；并行修复 spatial target 连续性；随后再做 online half-scan temporal/channel ablation。fusion gate/dropout 和 auxiliary supervision 放在上述归因稳定之后。完整记录见 `docs/diffusiondrive_lidar_diagnostics_20260715.md`。

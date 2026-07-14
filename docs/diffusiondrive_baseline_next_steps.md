@@ -8,7 +8,7 @@
 - 当前 full baseline-basic open-loop 很强：all-scenarios `l1_mean=0.0192`；但 Bench2Drive 220 closed-loop 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`。
 - 这说明主要问题已经从训练链路转向闭环执行：空间 checkpoint 到控制的速度语义 gap、低速/creep/safety-box、route deviation、collisions，以及部分 sensor contract gap。
 - `S1/S2` camera / crop 诊断表现明显差于 A8/A9/A12，说明当前不宜把主线继续押在 B2D-like 在线 camera geometry 上。sensor-aligned full retrain 暂时降级为归档/诊断方向。
-- `Z0/Z1` zero-LiDAR 20-route 诊断反而优于对应非 zero-LiDAR 对照，说明当前模型侧 LiDAR BEV 分支可能是负贡献；这个结论只针对模型输入的 LiDAR BEV，不代表 safety-box raw LiDAR 应关闭。
+- `Z0/Z1` 与 condition-v1 C2/L1 显示模型侧 LiDAR 会造成少数强闭环分叉；但 `39,432` 样本配对开环中 original 显著优于 zero/shuffle，证明 LiDAR 在 B2D raw 上是有效输入。当前结论是 online 时序/分布、随机扩散推理和 target 连续性共同混杂，不能再表述为“LiDAR 全局负贡献”。
 - 完全重训成本可接受，且 220-route 闭环比重训更慢；因此后续应减少纯推理侧小实验，把工作集中到少数结构性改动和 full retrain 上。
 
 ## 实验原则
@@ -618,6 +618,18 @@ C2_A9_pid_7_3_fallback:
 - 因为项目要求使用 LiDAR，后续主线应从“去掉 LiDAR”调整为“修复 LiDAR 接入”：把 no-LiDAR / zero-LiDAR 只作为诊断上界和归因工具。
 - 当前更准确的结论是：LiDAR 传感器本身仍然需要保留；问题集中在模型侧 `lidar_feature` 的传感器合同、BEV 表示、fusion 强度和监督方式。
 
+### 2026-07-15 配对开环与 contract 结果
+
+第一批诊断已完成，完整记录见 `diffusiondrive_lidar_diagnostics_20260715.md`：
+
+- `original/zero/shuffle` 各 `39,432` 个配对样本，mean L1 为 `0.02047/0.31397/0.58965`；original 在 `91.50%` 样本上优于 zero，在 `95.91%` 上优于 shuffle。
+- B2D 与 online 拼接 full scan 的角度覆盖都完整，没有 gross yaw 或半扫描漏掉；但 online 前向区域主要来自上一 tick，对移动 actor 存在固有时差。
+- density/occupancy drift 明显场景相关。route 153 的失败与大幅 occupancy drift 同时出现，但 route 139/185 在同样大的 drift 下仍完成，route 50 几乎匹配仍碰撞；不能只做全局 density scale 修复。
+- `37,101` 个相邻 transition 中 target endpoint jump `>5m` 占 `3.43%`，且其中 `95.67%` 伴随 original prediction jump。部分低速、condition 不变样本会因 future path 外推方向翻转产生约 20m 跳变。
+- `TrajectoryHead.forward_test()` 每次 forward 重新采样初始 diffusion noise；route 167/185 的重复闭环也没有复现原 C2 的同样灾难分叉。因此必须先量化随机 mode switching，不能用单次 route 直接决定 fusion 结构。
+
+修正后的顺序是：确定性/多 seed inference 与 mode margin 日志 -> spatial target 连续性 -> online half-scan temporal/channel ablation -> fusion gate/dropout/auxiliary supervision。channel 和结构性重训不取消，但不再排在第一步。
+
 ### 什么时候它会变成高优先级
 
 LiDAR / safety-box 应在以下情况升为主线问题：
@@ -827,11 +839,11 @@ notes:
 
 ## 当前推荐优先级
 
-1. `baseline-condition-v1` soft-clean + skip-first full retrain 已完成，先用 `DIFFUSIONDRIVE_USE_SPEED_HEAD=0` 的 spatial PID fallback 跑固定 20-route，隔离 trajectory + route token 的闭环效果。
-2. 旧 `C1_speedhead` direct longitudinal controller 已失败；2026-06-11 已按 syb 思路改为 uncertainty-weighted speed conversion，下一步可用新实验名先跑 route 00 / 24 sanity，再决定是否跑 20-route。
-3. open-loop all-scenarios 结果显示 condition-v1 轨迹误差略弱于 baseline-basic，但部分 left-turn / noScenarios / MergerIntoSlowTraffic 有改善；闭环结论仍需看 C0/C2 fallback 和新版 speed-head sanity。
-4. 对 LiDAR 分支做少量结构性修复实验，而不是继续只跑 runtime 开关：优先验证 train-vs-online LiDAR BEV contract、做 channel ablation 和 LiDAR fusion gate / dropout；`no-lidar retrain` 只作为诊断上界，正式主线仍应保留 LiDAR 并补 BEV / agent auxiliary supervision。
-5. 闭环只跑少数候选：先跑固定 20-route；只有明显接近或超过 A8/A9/A12/Z1，再跑 220-route。
-6. A8/A12 控制参数保留为推理 fallback 和对照；不再把大量 PID 插值作为主线。
-7. sensor-aligned / nocrop / B2D-like camera full retrain 暂停为低优先级，除非后续有新的证据说明 camera 是主瓶颈。
-8. route / safety-box debug 仍保留为诊断工具，但 safety-box speed cap 必须先用连续 tick / point count / nearest distance gate，不要用 nonempty 直接触发。
+1. 先实现确定性 diffusion inference：支持 fixed/zero/多 seed 初始 noise，记录 trajectory mode、top-1/top-2 margin、entropy 和 endpoint；跑 5-seed 配对开环，并对 route 24/50/139/153 做重复闭环。
+2. 修复 `spatial_path` 在低速停驻和 future path 不足时的方向外推，重建 manifest，并要求相邻 target endpoint 大跳变显著下降。
+3. 随后做 online half-scan temporal 与 above/below channel ablation；优先验证前向上一 tick 动态点云是否导致交互场景退化。
+4. 只有归因稳定后再做 conservative LiDAR fusion gate、受控 dropout 和 BEV/agent auxiliary supervision full retrain；no/zero-LiDAR 只保留为诊断上界。
+5. 新版 speed-head 仍先跑 route 00/24 sanity；不要与上述 LiDAR 归因实验同时改变纵向控制器。
+6. 闭环候选先跑固定 20-route；只有明显接近或超过 A8/A9/A12/Z1，再跑 220-route。重点 route 的结论至少需要多 seed/多 attempt。
+7. A8/A12 控制参数保留为 fallback 和对照，不再把大量 PID 插值作为主线。
+8. sensor-aligned/nocrop/B2D-like camera retrain 继续保持低优先级；route/safety-box debug 只作为受限频率的诊断工具。
