@@ -31,6 +31,7 @@ from diffusiondrive.carla_native_dataset import (  # noqa: E402
     route_condition_feature_metadata,
     target_speed_label_metadata,
 )
+from diffusiondrive.spatial_target import spatial_target_metadata  # noqa: E402
 from b2d_quality_filter import QUALITY_FILTERS, QUALITY_FILTER_NONE, quality_filter_decision  # noqa: E402
 
 
@@ -94,6 +95,7 @@ def make_header(args: argparse.Namespace, sample_count: int, scenario_counts: di
         "spatial_target_first_distance": args.spatial_target_first_distance,
         "spatial_target_interval": args.spatial_target_interval,
         "spatial_target_max_future_frames": args.spatial_target_max_future_frames,
+        "spatial_target": spatial_target_metadata(),
         "target_speed_label": target_speed_label_metadata(),
         "route_condition_feature": route_condition_feature_metadata(),
         "sample_count": sample_count,

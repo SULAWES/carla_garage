@@ -9,7 +9,7 @@
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
 - 当前模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder；syb 常用的 `regnety_032` 是 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain
-- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。C2/L1 对照已完成；后续 `39,432` 样本配对开环显示 original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，证明模型在 B2D raw 上正确使用 LiDAR。online full scan 未发现 gross yaw/覆盖错误，但前向动态点云晚一 tick、density drift 场景相关。正式主线保留 LiDAR，先排除 diffusion inference 随机性和 spatial target 不连续，再做 channel/fusion/supervision
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。C2/L1 对照已完成；后续 `39,432` 样本配对开环显示 original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，证明模型在 B2D raw 上正确使用 LiDAR。online full scan 未发现 gross yaw/覆盖错误，但前向动态点云晚一 tick、density drift 场景相关。fixed 5-seed 已确认推理噪声是次级尾部因素；spatial target v2 代码已完成但 full manifest 尚待重建。正式主线保留 LiDAR，完成 v2 target 重训后再做 channel/fusion/supervision
 - 需要区分两套机制：
 - `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
@@ -67,8 +67,10 @@
   - [x] 完成配对开环归因：original 显著优于 zero，zero 又优于 shuffle，排除“模型忽略 LiDAR”和“LiDAR 全局负贡献”
   - [x] 完成第一批 train-vs-online contract：full scan angular coverage 正常；确认前向动态物体点云晚一 tick，且密度/占用 drift 是场景相关而非固定 scale
   - [x] 增加确定性 diffusion inference：支持 random/fixed/zero/seeded noise，记录 trajectory mode、top-2、margin、entropy 和 endpoint；在线 endpoint jump 会先做 ego-frame 对齐
-  - [ ] 用 fixed seed 0-4 跑开环，并对 route 24/50/139/153 做多 attempt 闭环，量化 mode switching 与 CARLA 随机性
-  - [ ] 修复并验证低速停驻段 `spatial_path` target 的方向连续性，避免未来窗口末端微小位移触发长距离反向外推
+  - [x] 完成 fixed seed 0-4 all-scenarios 开环：跨 seed endpoint p99 最大距离 `0.099m`，尾部异常仍高度集中在旧 target jump route
+  - [ ] 对 route 24/50/139/153 做 fixed seed 多 attempt 闭环，量化 CARLA 随机性
+  - [x] 实现低速停驻段 `arc_length_stable_extrapolation_v2`，避免窗口末端毫米级反向位移触发长距离外推
+  - [ ] 重建 full soft-clean v2 manifest 并验证全局 target continuity；当前旧统计前五 route 的 77/77 个 `>12m` 事件已全部降到 `<12m`，新 jump p95 为 `0.083m`
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
   - [ ] 在随机性、target 连续性和 temporal/channel 归因完成后评估 LiDAR fusion gate / dropout，保留 LiDAR 输入并降低未校准分支的早期污染
   - [ ] 若继续出现负贡献，优先补 `bev_semantic_map`、`agent_states`、`agent_labels` 等辅助监督，而不是把 zero-LiDAR 当正式方案

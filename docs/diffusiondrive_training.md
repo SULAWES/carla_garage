@@ -342,6 +342,58 @@ conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
 
 启动时脚本会额外抽样统计 command、speed bin、`abs(target_end_y)` bin 和 hard-case 数量，并写入输出目录的 sample distribution JSON。默认最多统计 `4096` 个样本；可用 `--dataset-stats-max-samples 0` 关闭，或调大以覆盖完整数据集。
 
+## Spatial Target Continuity Contract
+
+`spatial_path` 当前使用 `arc_length_stable_extrapolation_v2`。已观测 future ego path 内仍按弧长插值；只有路径不足以覆盖 `2.5m...11.5m` target 时才进入外推。外推方向不再直接使用窗口末端最后一个毫米级 segment：
+
+- 如果终点相对某个尾部历史点存在至少 `0.5m` 的位移，使用该 trailing displacement 作为稳定切线。
+- 如果整个窗口都没有 `0.5m` 的可靠位移，使用当前 annotation 的 route condition 方向，优先级为 command world point、`target_point`、`target_point_next`、ego forward。
+- `0.001m` 以下的相邻重复点仍会在弧长重采样前去除。
+
+这个修复针对低速停驻时 pose 量化抖动导致的反向长距离外推。已知 `MergerIntoSlowTrafficV2/Town12_Rep0_968_25...` 中，旧缓存 `frame 140 -> 155` 的 endpoint jump 约 `22.74m`；v2 重算后为约 `0.004m`。该 route 上 8 个旧 `>12m` 跳变均降到 `0.002m...0.058m`。进一步对旧统计中 `>12m` 最多的前五条 route 做配对重算，77/77 个事件全部降到 `<12m`，p95 为 `0.083m`；仅 2 个仍 `>5m`，两者都有 `>85m` route-condition 变化及明显速度/command 阶段切换。
+
+target contract 会写入 `training_config.json` 和 manifest header 的 `spatial_target` 字段。旧 manifest 没有该字段，当前 loader 会明确拒绝；不要覆盖旧缓存，应使用带 `stable_v2` 后缀的新路径重建，以保留旧实验的可追溯性。
+
+可先在旧 manifest 上定位并重算高跳变事件：
+
+```bash
+python tools/inspect_diffusiondrive_spatial_target_continuity.py \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial.jsonl \
+  --output-dir /share/home/u19666033/ltr/dd_logs/lidar_diagnostics/spatial_target_old_vs_v2 \
+  --event-threshold 12 \
+  --max-events 150 \
+  --num-workers 32
+```
+
+输出包括全量 `transitions.csv`、异常 `events.csv`、包含原始 future world pose/ego-frame polyline/外推来源的 `event_traces.jsonl` 和 `summary.json`。旧缓存诊断不通过 dataset loader，因此可以显式比较旧 target 与当前 contract。
+
+用于和当前 `39,432` 样本结果配对的新 manifest 应保持 scenario cap 不变：
+
+```bash
+python tools/build_diffusiondrive_manifest.py \
+  --root-dir /share/home/u19666033/djy/carla_dataset \
+  --route-glob "*/*" \
+  --output-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial_stable_v2.jsonl \
+  --frame-sampling 5 \
+  --skip-first-frames 25 \
+  --balanced-scenarios \
+  --max-samples-per-scenario 1024 \
+  --quality-filter soft_clean \
+  --num-workers 32 \
+  --rebuild \
+  --verify-load
+
+python tools/inspect_diffusiondrive_spatial_target_continuity.py \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial_stable_v2.jsonl \
+  --reference-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial.jsonl \
+  --output-dir /share/home/u19666033/ltr/dd_logs/lidar_diagnostics/spatial_target_v2_full \
+  --event-threshold 12 \
+  --max-events 150 \
+  --num-workers 32
+```
+
+先确认 `summary.json.reference_comparison` 中 `same_key_set=true`、duplicate/missing/extra 均为 0、invariant mismatch 为空，再比较 `>5m/>12m` 统计；不能只看已知 top route。
+
 ## Sample Manifest and CPU Bottlenecks
 
 raw B2D Full loader 的主要 CPU / IO 压力来自反复解 `json.gz` 构造 `spatial_path` target、解 `.laz` 并生成 LiDAR histogram，以及图像解码 / resize。训练入口现在支持 sample manifest，先把每个样本的 route/frame、`status_feature` 所需 command/speed 和 trajectory target 落盘为 JSONL，后续训练可直接读取 manifest，避免每个 epoch 反复扫描未来 annotation：
@@ -350,9 +402,9 @@ raw B2D Full loader 的主要 CPU / IO 压力来自反复解 `json.gz` 构造 `s
 --sample-manifest /share/home/u19666033/ltr/dd_cache/full_stage3_train_manifest.jsonl
 ```
 
-manifest 当前缓存的是样本发现与 target 构造结果，格式版本为 `diffusiondrive_sample_manifest_v1`，每行包含绝对 `route_dir`、`frame`、`command`、`speed` 和 `trajectory`。它不缓存图像 tensor 或 LiDAR histogram，所以训练时仍会在线解码 `rgb/*.jpg` 和 `lidar/*.laz`；优化重点是避免每个 epoch 为了构造空间轨迹 target 重复读取大量未来 `measurements/*.json.gz`。
+manifest 当前缓存的是样本发现与 target 构造结果，格式版本为 `diffusiondrive_sample_manifest_v1`，每行包含绝对 `route_dir`、`frame`、`command`、`speed` 和 `trajectory`。header 额外记录独立的 `spatial_target` schema；格式名仍为 v1 不代表 target 语义兼容。它不缓存图像 tensor 或 LiDAR histogram，所以训练时仍会在线解码 `rgb/*.jpg` 和 `lidar/*.laz`；优化重点是避免每个 epoch 为了构造空间轨迹 target 重复读取大量未来 `measurements/*.json.gz`。
 
-如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会先读取 header 并校验当前 dataset 参数。校验覆盖 `target-mode / num-poses / future-stride / spatial target 参数 / frame-sampling / balanced-scenarios / max-samples-per-scenario / route-glob / root-dir / sample_count` 等字段；不匹配会直接报错，避免 baseline 长训静默使用错误分布。manifest 与数据选择和 target 语义绑定，至少要按 `root-dir / route-glob / frame-sampling / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 区分命名；这些参数变化后应换一个 manifest 文件或强制重建。需要强制重建时加：
+如果 manifest 不存在，脚本会在 dataset 初始化时创建；如果已存在，会先读取 header 并校验当前 dataset 参数。校验覆盖 `target-mode / num-poses / future-stride / spatial target 参数和 schema / frame-sampling / balanced-scenarios / max-samples-per-scenario / route-glob / root-dir / sample_count` 等字段；不匹配会直接报错，避免 baseline 长训静默使用错误分布。manifest 与数据选择和 target 语义绑定，至少要按 `root-dir / route-glob / frame-sampling / target-mode / spatial target contract / balanced-scenarios / max-samples-per-scenario` 区分命名。`arc_length_stable_extrapolation_v2` 上线后，不要继续使用不含 `spatial_target` header 的旧缓存；应换新路径重建。需要强制重建时加：
 
 ```bash
 --rebuild-sample-manifest
@@ -379,8 +431,8 @@ python team_code/train_diffusiondrive.py \
   ... \
   --num-workers 5 \
   --prefetch-factor 2 \
-  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_train_fs5_spatial.jsonl \
-  --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial.jsonl
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_train_fs5_spatial_stable_v2.jsonl \
+  --val-sample-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_stable_v2.jsonl
 ```
 
 可以把 `--num-workers` 试到 `6`，但不要超过作业实际申请的 CPU 核数。`--persistent-workers` 会减少 epoch 切换时重启 worker 的开销，但如果远端长训中遇到 dataloader 卡住或退出不干净，先保持默认关闭。
@@ -391,7 +443,7 @@ python team_code/train_diffusiondrive.py \
 python tools/build_diffusiondrive_manifest.py \
   --root-dir /share/home/u19666033/djy/carla_dataset \
   --route-glob "*/*" \
-  --output-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25.jsonl \
+  --output-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25_stable_v2.jsonl \
   --frame-sampling 5 \
   --skip-first-frames 25 \
   --balanced-scenarios \
@@ -417,7 +469,7 @@ manifest builder 可选 route-level quality filter：
 python tools/build_diffusiondrive_manifest.py \
   --root-dir /share/home/u19666033/djy/carla_dataset/NonSignalizedJunctionLeftTurn \
   --route-glob "*" \
-  --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25.jsonl \
+  --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25_stable_v2.jsonl \
   --frame-sampling 5 \
   --skip-first-frames 25 \
   --max-samples 1024 \
@@ -426,7 +478,7 @@ python tools/build_diffusiondrive_manifest.py \
   --verify-load
 ```
 
-`--num-workers` 是 CPU 多进程数，只用于并行读取 annotation 和构造 trajectory target / route condition / speed labels；不要把它和训练 DataLoader 的 `--num-workers` 混淆。预构建 manifest 时的 `root-dir / route-glob / frame-sampling / skip-first-frames / target-mode / spatial target 参数 / balanced-scenarios / max-samples-per-scenario` 必须和后续 GPU 训练保持一致。当前 condition-v1 loader 要求 manifest header 和每条 record 都包含 `target_speed_label` 与 `route_condition_feature`；旧 manifest 不再静默 fallback 到逐样本读取 annotation，应直接重建。
+`--num-workers` 是 CPU 多进程数，只用于并行读取 annotation 和构造 trajectory target / route condition / speed labels；不要把它和训练 DataLoader 的 `--num-workers` 混淆。预构建 manifest 时的 `root-dir / route-glob / frame-sampling / skip-first-frames / target-mode / spatial target 参数与 schema / balanced-scenarios / max-samples-per-scenario` 必须和后续 GPU 训练保持一致。当前 condition-v1 loader 要求 manifest header 和每条 record 都包含 `target_speed_label` 与 `route_condition_feature`；spatial target 还要求当前 `spatial_target` contract。旧 manifest 不再静默 fallback 到逐样本读取 annotation，应换路径重建。
 
 ## Eval Error Inspection
 

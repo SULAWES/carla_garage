@@ -143,8 +143,10 @@
   - [x] 完成 `39,432` 样本配对开环：original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，确认模型在 B2D raw 上正确利用 LiDAR，而不是忽略该分支
   - [x] 完成第一批 online contract 对比：拼接 full scan angular coverage 正常；主要剩余问题是前向动态点云晚一 tick，以及 route 153 等场景的 density/occupancy drift
   - [x] 增加确定性 diffusion inference 入口：`random/fixed/zero/seeded` noise，输出 mode、top-1/top-2 margin、entropy 和 endpoint；fixed 不依赖 batch size，seeded 按稳定 sample key 生成显式 noise
-  - [ ] 运行 5-seed all-scenarios 开环与 route 24/50/139/153 重复闭环，量化跨 seed tail overlap、mode switching 和 CARLA attempt 方差
-  - [ ] 修复 `spatial_path` 在低速停驻和未来路径不足时的外推方向不连续；重建 manifest 并复核相邻 target endpoint jump
+  - [x] 运行 fixed seed 0-4 all-scenarios 开环：五组各 39,432 样本，mean L1 范围 `0.01875...0.02106`，确认随机 noise 是次级尾部因素
+  - [ ] 对 route 24/50/139/153 跑 fixed seed 多 attempt 闭环，量化 CARLA attempt 方差
+  - [x] 实现 `arc_length_stable_extrapolation_v2`：外推使用至少 `0.5m` trailing displacement，不足时使用 route condition；旧 manifest schema 明确失效
+  - [ ] 重建 full soft-clean v2 manifest，复核相邻 target endpoint `>5m/>12m` jump；当前旧统计前五 route 的 77/77 个 `>12m` 事件已全部降到 `<12m`
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
   - [ ] 在确定性推理、target 连续性和 channel/temporal 归因后，评估 LiDAR fusion gate / dropout full retrain，避免把多个问题混入一次训练
   - [ ] 补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision，让 LiDAR 分支学习可解释的近场几何 / 动态体语义，而不是只靠 trajectory loss 间接学习

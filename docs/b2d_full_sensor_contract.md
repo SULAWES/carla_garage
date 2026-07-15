@@ -156,6 +156,6 @@ anchor 估计语义：
 1. full baseline-basic 已完成，B2D Full raw + scenario-balanced manifest 能支持全量训练，且 open-loop all-scenarios `l1_mean=0.0192`。
 2. 当前 closed-loop Bench2Drive 220 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明仅靠 B2D Full open-loop 轨迹误差不能保证闭环表现。
 3. condition-v1 full retrain、C2/L1 20-route、配对开环和第一批 online contract 统计均已完成。当前不能继续把问题简化为“LiDAR 负贡献”。
-4. 固定/zero/seeded diffusion inference 与 mode/top-2/margin/entropy/endpoint 日志入口已实现；第一优先运行 fixed seed 0-4 开环和重点 route 重复闭环，量化灾难性分叉中的推理随机性。
-5. 并行修复 `spatial_path` 在低速停驻、未来路径不足时的外推方向连续性；重建 manifest 后要求 target endpoint jump 显著下降。
+4. fixed seed 0-4 all-scenarios 开环已完成，确认推理随机性是次级尾部因素；重点 route 多 attempt 闭环仍待完成。
+5. `arc_length_stable_extrapolation_v2` 已修复低速停驻、未来路径不足时的外推方向；下一步重建 full soft-clean manifest，并要求全局 target endpoint jump 显著下降。
 6. 完成以上归因后，再比较 half-scan temporal 方案和 above/below channel；只有稳定收益出现后才进入 fusion gate/dropout 或 auxiliary-supervision full retrain。

@@ -512,3 +512,13 @@ L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_
 因此下一步顺序修正为：先实现固定/zero/多 seed diffusion noise 与 mode/margin 日志，确认随机推理对灾难分叉的贡献；并行修复 spatial target 连续性；随后再做 online half-scan temporal/channel ablation。fusion gate/dropout 和 auxiliary supervision 放在上述归因稳定之后。完整记录见 `docs/diffusiondrive_lidar_diagnostics_20260715.md`。
 
 同日已完成确定性推理入口：模型支持 `random/fixed/zero/seeded` noise，开环 CSV 输出 mode/top-2/margin/entropy/endpoint，在线 agent 写独立 trajectory JSONL 并在比较 endpoint 前做 ego-frame 对齐。本地 fixed/seeded mini 重复推理均得到 `max_abs_diff=0.0`；远端 fixed seed 0-4 与 route 24/50/139/153 多 attempt 尚待运行。
+
+### Fixed 5-seed 与 spatial target v2（2026-07-15）
+
+远端 fixed seed `0...4` all-scenarios 开环已完成，每组均为 `39,432` 个严格配对样本。五组 mean L1 平均 `0.01936`，范围 `0.01875...0.02106`；历史 random run 为 `0.02047`。跨 seed endpoint 最大两两距离 p95/p99 仅 `0.052m/0.099m`。`L1>1m` 并集 `127`、交集 `29`，其中 `123/127` 位于存在 target jump `>12m` 的 route，`93/127` 位于 jump 前后两个采样间隔内。结论是 diffusion noise 会改变部分尾部归属，但旧 target 不连续是主要来源。
+
+随后对高频异常 route `MergerIntoSlowTrafficV2/Town12_Rep0_968_25...` 下钻原始 annotation。旧实现会把窗口末端约 `1.5mm` 的反向 pose 量化抖动当成最后有效 segment，再外推到 `11.5m`；窗口滑动时方向翻转。已实现 `arc_length_stable_extrapolation_v2`：外推优先使用至少 `0.5m` baseline 的 trailing displacement，不足时使用 route condition；已观测路径内的弧长插值不变。该 route 的 8 个旧 `>12m` jump 重算后全部降为 `0.002m...0.058m`。
+
+跨场景抽取旧 `>12m` 统计前五条 route 后，v2 将 `77/77` 个事件全部降到 `<12m`，新 jump p95 为 `0.083m`。仅 2 个仍 `>5m`，均伴随 `>85m` route-condition delta 和明显速度/command 阶段变化，不属于停驻抖动。该结果覆盖全量 119 个旧大跳变中的 77 个，支持保留 `0.5m` 稳定 baseline。
+
+同时新增 `tools/inspect_diffusiondrive_spatial_target_continuity.py`，输出全量 transition、旧缓存与当前 contract 的重算对比，以及 future world pose / ego-frame polyline / 外推来源 trace。manifest header 新增 `spatial_target` schema，旧缓存会被训练 loader 明确拒绝。当前尚未完成 full soft-clean v2 manifest 重建和全局 jump 复核；完成后才能启动基于 v2 target 的正式 full retrain。route 24/50/139/153 多 attempt 闭环也仍待运行。

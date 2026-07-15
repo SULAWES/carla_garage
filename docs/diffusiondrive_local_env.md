@@ -89,6 +89,13 @@
 
 Bench2Drive mini smoke 中的 `10x2` target 默认不再是 fixed-time future ego trajectory，而是从 future ego path 空间重采样得到的 checkpoint target。坐标转换优先使用 raw annotation 中 ego vehicle `world2ego` 矩阵，缺失矩阵时才 fallback 到经过 `preprocess_compass()` 等价处理的 `x/y/theta`。当前 `team_code/diffusiondrive/backbone.py` 已在本地 backbone 文件存在时优先加载本地权重，避免 smoke test 先访问 HuggingFace 再 fallback。
 
+2026-07-15 `arc_length_stable_extrapolation_v2` 上线后重新完成：
+
+- B2D mini fixed-noise forward/loss/backward，重复 inference `max_abs_diff=0.0`。
+- B2D Full 原生 route 1-step 训练、checkpoint 保存、新 manifest 写入与重载。
+- manifest header 和 `training_config.json` 均包含 `arc_length_stable_extrapolation_v2`、`0.5m` extrapolation baseline 和 `0.001m` 去重阈值。
+- 旧 spatial manifest 缺少新 contract 时会明确报错，不会静默进入训练。
+
 ## 常用环境变量
 
 ```bash

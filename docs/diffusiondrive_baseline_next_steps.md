@@ -628,7 +628,11 @@ C2_A9_pid_7_3_fallback:
 - `37,101` 个相邻 transition 中 target endpoint jump `>5m` 占 `3.43%`，且其中 `95.67%` 伴随 original prediction jump。部分低速、condition 不变样本会因 future path 外推方向翻转产生约 20m 跳变。
 - `TrajectoryHead.forward_test()` 每次 forward 重新采样初始 diffusion noise；route 167/185 的重复闭环也没有复现原 C2 的同样灾难分叉。因此必须先量化随机 mode switching，不能用单次 route 直接决定 fusion 结构。
 
-修正后的顺序是：确定性/多 seed inference 与 mode margin 日志 -> spatial target 连续性 -> online half-scan temporal/channel ablation -> fusion gate/dropout/auxiliary supervision。channel 和结构性重训不取消，但不再排在第一步。
+后续 fixed seed `0...4` 各 `39,432` 样本的配对开环表明：五 seed mean L1 范围为 `0.01875...0.02106`，跨 seed endpoint 最大距离 p99 仅 `0.099m`；`L1>1m` 并集 `127` 中有 `123` 位于存在 target jump `>12m` 的 route。随机 noise 会改变部分尾部归属，但 target 不连续是主因。
+
+`arc_length_stable_extrapolation_v2` 已实现：至少用 `0.5m` trailing displacement 估计外推切线，未来位移不足时使用 route condition，并通过 manifest schema 拒绝旧缓存。已知高频 route 的 8 个旧 `>12m` jump 重算后均降至 `0.058m` 以下；full manifest 重建与全局统计仍待完成。
+
+当前顺序是：重建并验证 spatial target v2 manifest -> 用 v2 target full retrain -> online half-scan temporal/channel ablation -> fusion gate/dropout/auxiliary supervision。重点 route fixed-seed 多 attempt 与前两步并行，用于量化 CARLA 方差。
 
 ### 什么时候它会变成高优先级
 
@@ -839,8 +843,8 @@ notes:
 
 ## 当前推荐优先级
 
-1. 确定性 diffusion inference 入口已实现：支持 fixed/zero/seeded noise，记录 trajectory mode、top-2/margin/entropy 和对齐后的 endpoint jump；下一步跑 fixed seed 0-4 配对开环，并对 route 24/50/139/153 做重复闭环。
-2. 修复 `spatial_path` 在低速停驻和 future path 不足时的方向外推，重建 manifest，并要求相邻 target endpoint 大跳变显著下降。
+1. fixed seed 0-4 all-scenarios 开环已完成；下一步重建 `arc_length_stable_extrapolation_v2` full soft-clean manifest，复核 `>5m/>12m` jump 和剩余 raw pose trace。
+2. 使用新 manifest full retrain；同时对 route 24/50/139/153 做 fixed seed 多 attempt 闭环，继续量化 CARLA 环境方差。
 3. 随后做 online half-scan temporal 与 above/below channel ablation；优先验证前向上一 tick 动态点云是否导致交互场景退化。
 4. 只有归因稳定后再做 conservative LiDAR fusion gate、受控 dropout 和 BEV/agent auxiliary supervision full retrain；no/zero-LiDAR 只保留为诊断上界。
 5. 新版 speed-head 仍先跑 route 00/24 sanity；不要与上述 LiDAR 归因实验同时改变纵向控制器。
