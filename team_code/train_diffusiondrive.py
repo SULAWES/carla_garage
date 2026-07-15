@@ -311,8 +311,9 @@ def write_run_config(output_dir: Path, args: argparse.Namespace, global_config: 
                 "max_future_seconds_for_path": args.spatial_target_max_future_frames * args.assumed_frame_interval,
                 "contract": spatial_target_metadata(),
                 "source": (
-                    "future ego path resampled by distance; extrapolation uses a trailing "
-                    "displacement with sufficient baseline, otherwise route condition"
+                    "future ego path resampled by distance; extrapolation uses the nearest "
+                    "trailing displacement with sufficient baseline and non-negative route "
+                    "alignment, otherwise route condition"
                 ),
             },
             "future_ego_time_legacy": {

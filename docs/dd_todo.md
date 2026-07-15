@@ -9,7 +9,7 @@
 - 旧版问题分析已移入 `docs/outdated/`
 - `status_feature` 已按 CARLA 重新训练主线迁移为 7 维 schema，不再以 NAVSIM checkpoint 对齐为目标
 - 当前模型侧 LiDAR 是 NAVSIM-style 单帧 BEV histogram + `resnet34` encoder；syb 常用的 `regnety_032` 是 `timm` 2D CNN backbone，不是 LiDAR 专用表示，切换需要 full retrain
-- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。C2/L1 对照已完成；后续 `39,432` 样本配对开环显示 original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，证明模型在 B2D raw 上正确使用 LiDAR。online full scan 未发现 gross yaw/覆盖错误，但前向动态点云晚一 tick、density drift 场景相关。fixed 5-seed 已确认推理噪声是次级尾部因素；spatial target v2 代码已完成但 full manifest 尚待重建。正式主线保留 LiDAR，完成 v2 target 重训后再做 channel/fusion/supervision
+- `DIFFUSIONDRIVE_ZERO_LIDAR=1` 只置零模型 `lidar_feature`，不关闭 raw LiDAR safety-box。C2/L1 对照已完成；后续 `39,432` 样本配对开环显示 original/zero/shuffle mean L1 为 `0.02047/0.31397/0.58965`，证明模型在 B2D raw 上正确使用 LiDAR。online full scan 未发现 gross yaw/覆盖错误，但前向动态点云晚一 tick、density drift 场景相关。fixed 5-seed 已确认推理噪声是次级尾部因素；spatial target v2 全量门控已完成，当前 v3 加入反向外推 guard，待调度作业重建验证。正式主线保留 LiDAR，完成 v3 target 重训后再做 channel/fusion/supervision
 - 需要区分两套机制：
 - `DiffusionDriveAgent` 当前显式构造的是 `status_feature = command_one_hot(6) + speed(1)`
 - `carla_garage/team_code/model.py` 中另有可选 `extra_sensors` 分支，会按配置拼接 `velocity(1)` 与 `discrete_command(6)` 后再编码；它不是固定的“command 6+1 维”
@@ -70,7 +70,9 @@
   - [x] 完成 fixed seed 0-4 all-scenarios 开环：跨 seed endpoint p99 最大距离 `0.099m`，尾部异常仍高度集中在旧 target jump route
   - [ ] 对 route 24/50/139/153 做 fixed seed 多 attempt 闭环，量化 CARLA 随机性
   - [x] 实现低速停驻段 `arc_length_stable_extrapolation_v2`，避免窗口末端毫米级反向位移触发长距离外推
-  - [ ] 重建 full soft-clean v2 manifest 并验证全局 target continuity；当前旧统计前五 route 的 77/77 个 `>12m` 事件已全部降到 `<12m`，新 jump p95 为 `0.083m`
+  - [x] 完成 full soft-clean v2 配对门控：样本和条件标签严格一致，`>12m` jump 从 `119` 降到 `19`；剩余异常暴露碰撞后反向 trailing displacement
+  - [x] 增加 v3 route-alignment guard；剩余 19 条 trace 的本地反事实中只保留 7 条 `>12m`，且均伴随大幅 route-condition 切换
+  - [ ] 用调度作业重建并验证 v3 manifest，通过后再启动保留 LiDAR 的 full retrain
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
   - [ ] 在随机性、target 连续性和 temporal/channel 归因完成后评估 LiDAR fusion gate / dropout，保留 LiDAR 输入并降低未校准分支的早期污染
   - [ ] 若继续出现负贡献，优先补 `bev_semantic_map`、`agent_states`、`agent_labels` 等辅助监督，而不是把 zero-LiDAR 当正式方案

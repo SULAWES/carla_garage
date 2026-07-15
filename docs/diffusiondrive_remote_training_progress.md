@@ -521,4 +521,12 @@ L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_
 
 跨场景抽取旧 `>12m` 统计前五条 route 后，v2 将 `77/77` 个事件全部降到 `<12m`，新 jump p95 为 `0.083m`。仅 2 个仍 `>5m`，均伴随 `>85m` route-condition delta 和明显速度/command 阶段变化，不属于停驻抖动。该结果覆盖全量 119 个旧大跳变中的 77 个，支持保留 `0.5m` 稳定 baseline。
 
-同时新增 `tools/inspect_diffusiondrive_spatial_target_continuity.py`，输出全量 transition、旧缓存与当前 contract 的重算对比，以及 future world pose / ego-frame polyline / 外推来源 trace。manifest header 新增 `spatial_target` schema，旧缓存会被训练 loader 明确拒绝。当前尚未完成 full soft-clean v2 manifest 重建和全局 jump 复核；完成后才能启动基于 v2 target 的正式 full retrain。route 24/50/139/153 多 attempt 闭环也仍待运行。
+同时新增 `tools/inspect_diffusiondrive_spatial_target_continuity.py`，输出全量 transition、旧缓存与当前 contract 的重算对比，以及 future world pose / ego-frame polyline / 外推来源 trace。manifest header 新增 `spatial_target` schema，旧缓存会被训练 loader 明确拒绝。
+
+### Spatial target v2 全量门控与 v3 guard（2026-07-16）
+
+已构建 v2 full soft-clean scenario-capped 配对 manifest，共 `39,432` 样本。相对旧 manifest，sample key set/order 完全一致，duplicate/missing/extra 均为 0，command/speed/route condition/target speed/brake/class/valid/twohot 等 invariant mismatch 为空。全量 `37,101` 个 transition 中，endpoint jump `>12m` 从 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`。
+
+剩余 19 条 trace 中，11 条来自 `InterurbanAdvancedActorFlow`；多数事件伴随速度和 observed future path length 急降，且 v2 选择的 trailing displacement 与 route fallback 反向或近乎正交，cosine 最低为 `-0.94`。这说明 `0.5m` displacement 门槛能消除量化抖动，但仍会接受碰撞后回弹/横移作为长距离外推方向。
+
+当前代码已升级为 `arc_length_route_aligned_extrapolation_v3`：最近达到 `0.5m` 的 trailing displacement 还必须满足 route-alignment cosine `>=0`；候选反向时立即 fallback，不跨过回弹段寻找更老的位移。对 19 条 trace 使用实际 v3 resampler 重算将 `>12m` 降到 7 条；剩余事件全部伴随 `35m...250m` route-condition delta。下一步必须通过调度作业重建 v3 配对 manifest 并复核实际全量统计，之后再构建无 scenario cap 的 v3 train/val manifest 并 full retrain。route 24/50/139/153 多 attempt 闭环也仍待运行。

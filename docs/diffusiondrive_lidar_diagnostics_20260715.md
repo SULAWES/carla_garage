@@ -60,7 +60,11 @@ target jump `>12m` 后一帧的 original mean L1 达到 `1.52m`。另有 `170` �
 
 代码已改为 `arc_length_stable_extrapolation_v2`：已观测路径内的弧长插值不变；外推使用至少 `0.5m` baseline 的 trailing displacement，未来窗口总位移不足时改用 route condition。旧 manifest 会因缺少新 `spatial_target` schema 被 loader 明确拒绝。该已知 route 的 8 个旧 `>12m` jump 在 v2 重算后全部降为 `0.002m...0.058m`。
 
-又对旧统计中 `>12m` 最多的前五条 route 做了 raw annotation 配对重算，覆盖 `77/119` 个全量大跳变：77 个事件全部降到 `<12m`，新 jump p95 为 `0.083m`。仅 2 个仍 `>5m`，它们分别伴随 `85m/146m` route-condition delta、明显减速和 command/阶段切换，应保留为真实 transition。全量新 manifest 重建和 `39,432` 样本统计尚待运行。
+又对旧统计中 `>12m` 最多的前五条 route 做了 raw annotation 配对重算，覆盖 `77/119` 个全量大跳变：77 个事件全部降到 `<12m`，新 jump p95 为 `0.083m`。仅 2 个仍 `>5m`，它们分别伴随 `85m/146m` route-condition delta、明显减速和 command/阶段切换，应保留为真实 transition。
+
+2026-07-16 已完成 v2 全量 `39,432` 样本配对门控。样本 key/order 完全一致，duplicate/missing/extra 和 condition/speed/brake 等 invariant mismatch 均为 0；`>12m` jump 从旧版 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`。剩余 19 条中有 11 条来自 `InterurbanAdvancedActorFlow`，多伴随车速和 future path length 急降；trace 显示 trailing displacement 与 route fallback cosine 最低到 `-0.94`。
+
+因此 contract 继续升级为 `arc_length_route_aligned_extrapolation_v3`：可靠 trailing displacement 除了至少 `0.5m`，还必须与 route fallback cosine `>=0`。只对需要外推的方向选择增加 guard，不修改已观测路径内的弧长插值。对上述 19 条 trace 本地反事实重算后，`>12m` 降到 7 条；剩余 7 条全部伴随 `35m...250m` route-condition delta。v3 full manifest 仍需通过调度作业重建并做实际全量复核。
 
 同时，`TrajectoryHead.forward_test()` 历史行为会在每次 forward 从新的 `torch.randn()` 开始扩散去噪。zero-LiDAR 的预测显著更平滑，既可能来自模态被置零后模型退化为稳定先验，也可能包含随机初始噪声触发 mode switching 的影响，因此补做了 5-seed 配对诊断。
 
@@ -116,10 +120,10 @@ route 167/185 的本次 contract run 与原 C2 结果相比已不再出现相同
 
 ## 下一步顺序
 
-1. **重建并验证 spatial target。** v2 代码和单 route 验证已完成；下一步新建 full soft-clean manifest，重新统计 `>5m/>12m` jump，并抽查剩余事件的 raw pose trace。
+1. **重建并验证 spatial target。** v2 全量门控已完成并暴露反向 trailing displacement；下一步通过调度作业新建 v3 full soft-clean 配对 manifest，重新统计 `>5m/>12m` jump，并确认剩余事件均由大幅 route-condition 切换解释。
 2. **完成重点 route 方差诊断。** 5-seed all-scenarios 开环已完成；route 24/50/139/153 的 fixed seed 多 attempt 闭环仍待跑，用于区分模型 seed 与 CARLA 环境方差。
 3. **再做 online temporal LiDAR 诊断。** 优先比较当前 half-scan concat、仅当前 half、对动态区域降权等方案；同时做 above/below channel ablation。
-4. **最后进入训练结构改造。** 用 v2 target full retrain 后评估 conservative fusion gate、受控 modality dropout 和 BEV/agent auxiliary supervision。此时再决定是否需要 density alignment 或新 LiDAR backbone。
+4. **最后进入训练结构改造。** 用 v3 target full retrain 后评估 conservative fusion gate、受控 modality dropout 和 BEV/agent auxiliary supervision。此时再决定是否需要 density alignment 或新 LiDAR backbone。
 
 进入 fusion full retrain 的门槛是：固定 seed 下灾难样本可复现、target jump 已显著下降，并且至少一个 LiDAR channel/temporal ablation 能稳定解释 route-level 改善。否则新结构会把多个问题混在一次昂贵重训中。
 

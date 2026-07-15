@@ -65,6 +65,55 @@ class DiffusionDriveSpatialTargetTest(unittest.TestCase):
         self.assertGreater(target[0, 0], 2.4)
         self.assertLess(abs(target[0, 1]), 0.01)
 
+    def test_reverse_trailing_displacement_uses_route_condition(self) -> None:
+        points = np.asarray([
+            [0.0, 0.0],
+            [0.8, 0.0],
+            [0.1, 0.0],
+        ])
+        diagnostics = {}
+
+        target = MODULE.resample_polyline_by_distance(
+            points,
+            np.asarray([2.5, 3.5]),
+            np.asarray([1.0, 0.0]),
+            diagnostics=diagnostics,
+        )
+
+        self.assertEqual(
+            diagnostics["extrapolation_direction_source"],
+            "route_condition_alignment_guard",
+        )
+        self.assertLess(
+            diagnostics["extrapolation_trailing_candidate_alignment"], 0.0
+        )
+        self.assertGreater(target[0, 0], 1.0)
+
+    def test_alignment_guard_does_not_cross_reverse_tail(self) -> None:
+        points = np.asarray([
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [2.0, 0.0],
+            [1.4, 0.0],
+        ])
+        diagnostics = {}
+
+        target = MODULE.resample_polyline_by_distance(
+            points,
+            np.asarray([3.5, 4.5]),
+            np.asarray([1.0, 0.0]),
+            diagnostics=diagnostics,
+        )
+
+        self.assertEqual(
+            diagnostics["extrapolation_direction_source"],
+            "route_condition_alignment_guard",
+        )
+        self.assertAlmostEqual(
+            diagnostics["extrapolation_direction_baseline_meters"], 0.6
+        )
+        self.assertGreater(target[1, 0], target[0, 0])
+
     def test_observed_arc_length_interpolation_is_unchanged(self) -> None:
         points = np.asarray([[0.0, 0.0], [4.0, 0.0]])
         diagnostics = {}
@@ -82,9 +131,17 @@ class DiffusionDriveSpatialTargetTest(unittest.TestCase):
     def test_contract_metadata_records_stability_threshold(self) -> None:
         metadata = MODULE.spatial_target_metadata()
 
-        self.assertEqual(metadata["schema"], "arc_length_stable_extrapolation_v2")
-        self.assertEqual(metadata["extrapolation_strategy"], "trailing_displacement_or_route_condition")
+        self.assertEqual(
+            metadata["schema"], "arc_length_route_aligned_extrapolation_v3"
+        )
+        self.assertEqual(
+            metadata["extrapolation_strategy"],
+            "route_aligned_trailing_displacement_or_route_condition",
+        )
         self.assertAlmostEqual(metadata["min_extrapolation_displacement_meters"], 0.5)
+        self.assertAlmostEqual(
+            metadata["min_extrapolation_route_alignment_cosine"], 0.0
+        )
 
 
 if __name__ == "__main__":

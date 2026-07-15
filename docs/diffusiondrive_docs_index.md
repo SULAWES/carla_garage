@@ -12,7 +12,7 @@
 - [diffusiondrive_navsim_vs_carla_gap.md](diffusiondrive_navsim_vs_carla_gap.md)：NAVSIM 原版 DiffusionDrive 与 CARLA Garage 环境差异。
 - [diffusiondrive_input_preprocessing.md](diffusiondrive_input_preprocessing.md)：当前 DiffusionDrive 输入预处理核对和训练前决策项。
 - [b2d_full_sensor_contract.md](b2d_full_sensor_contract.md)：Bench2Drive Full 主训练分布的 sensor / time / preprocessing contract。
-- [diffusiondrive_lidar_diagnostics_20260715.md](diffusiondrive_lidar_diagnostics_20260715.md)：condition-v1 配对开环 LiDAR 归因、train-vs-online contract、fixed 5-seed、spatial target v2 和下一步决策门槛。
+- [diffusiondrive_lidar_diagnostics_20260715.md](diffusiondrive_lidar_diagnostics_20260715.md)：condition-v1 配对开环 LiDAR 归因、train-vs-online contract、fixed 5-seed、spatial target v2/v3 和下一步决策门槛。
 - [diffusiondrive_anchor_adaptation.md](diffusiondrive_anchor_adaptation.md)：最新 `99x10x2` anchor 的适配路线。
 - [diffusiondrive_training.md](diffusiondrive_training.md)：当前 CARLA-native DiffusionDrive 训练入口和 smoke 命令。
 - [diffusiondrive_remote_training_progress.md](diffusiondrive_remote_training_progress.md)：远端 B2D Full 训练阶段、baseline-basic open-loop / closed-loop、20-route 闭环 A/B 和高误差样本诊断。

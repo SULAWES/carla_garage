@@ -146,7 +146,9 @@
   - [x] 运行 fixed seed 0-4 all-scenarios 开环：五组各 39,432 样本，mean L1 范围 `0.01875...0.02106`，确认随机 noise 是次级尾部因素
   - [ ] 对 route 24/50/139/153 跑 fixed seed 多 attempt 闭环，量化 CARLA attempt 方差
   - [x] 实现 `arc_length_stable_extrapolation_v2`：外推使用至少 `0.5m` trailing displacement，不足时使用 route condition；旧 manifest schema 明确失效
-  - [ ] 重建 full soft-clean v2 manifest，复核相邻 target endpoint `>5m/>12m` jump；当前旧统计前五 route 的 77/77 个 `>12m` 事件已全部降到 `<12m`
+  - [x] 完成 `39,432` 样本 v2 配对门控：key/order 和 condition/speed/brake 不变量零差异，`>12m` jump 从 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`
+  - [x] 实现 `arc_length_route_aligned_extrapolation_v3`：可靠 trailing displacement 还必须与 route condition cosine `>=0`；19 条剩余 trace 的本地反事实重算将 `>12m` 降到 7，且剩余事件 route-condition delta 均 `>=35m`
+  - [ ] 通过调度作业重建 full soft-clean v3 配对 manifest，确认实际全量 `>12m` 结果与反事实一致，再构建无 scenario cap 的正式训练/验证 manifest
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
   - [ ] 在确定性推理、target 连续性和 channel/temporal 归因后，评估 LiDAR fusion gate / dropout full retrain，避免把多个问题混入一次训练
   - [ ] 补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision，让 LiDAR 分支学习可解释的近场几何 / 动态体语义，而不是只靠 trajectory loss 间接学习

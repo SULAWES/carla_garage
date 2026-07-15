@@ -7,10 +7,13 @@ from typing import Optional
 import numpy as np
 
 
-SPATIAL_TARGET_SCHEMA = "arc_length_stable_extrapolation_v2"
+SPATIAL_TARGET_SCHEMA = "arc_length_route_aligned_extrapolation_v3"
 SPATIAL_TARGET_MIN_SEGMENT_LENGTH_METERS = 1e-3
 SPATIAL_TARGET_MIN_EXTRAPOLATION_DISPLACEMENT_METERS = 0.5
-SPATIAL_TARGET_EXTRAPOLATION_STRATEGY = "trailing_displacement_or_route_condition"
+SPATIAL_TARGET_MIN_EXTRAPOLATION_ROUTE_ALIGNMENT_COSINE = 0.0
+SPATIAL_TARGET_EXTRAPOLATION_STRATEGY = (
+    "route_aligned_trailing_displacement_or_route_condition"
+)
 
 
 def spatial_target_metadata() -> dict:
@@ -20,6 +23,9 @@ def spatial_target_metadata() -> dict:
         "extrapolation_strategy": SPATIAL_TARGET_EXTRAPOLATION_STRATEGY,
         "min_extrapolation_displacement_meters": (
             SPATIAL_TARGET_MIN_EXTRAPOLATION_DISPLACEMENT_METERS
+        ),
+        "min_extrapolation_route_alignment_cosine": (
+            SPATIAL_TARGET_MIN_EXTRAPOLATION_ROUTE_ALIGNMENT_COSINE
         ),
     }
 
@@ -47,6 +53,9 @@ def resample_polyline_by_distance(
     fallback_direction: np.ndarray,
     *,
     min_extrapolation_displacement: float = SPATIAL_TARGET_MIN_EXTRAPOLATION_DISPLACEMENT_METERS,
+    min_extrapolation_route_alignment_cosine: float = (
+        SPATIAL_TARGET_MIN_EXTRAPOLATION_ROUTE_ALIGNMENT_COSINE
+    ),
     diagnostics: Optional[dict] = None,
 ) -> np.ndarray:
     points = _validate_points(points)
@@ -59,6 +68,11 @@ def resample_polyline_by_distance(
         raise ValueError(
             "min_extrapolation_displacement must be >= 0, "
             f"got {min_extrapolation_displacement}"
+        )
+    if not -1.0 <= min_extrapolation_route_alignment_cosine <= 1.0:
+        raise ValueError(
+            "min_extrapolation_route_alignment_cosine must be in [-1, 1], "
+            f"got {min_extrapolation_route_alignment_cosine}"
         )
 
     if points.shape[0] == 0:
@@ -78,6 +92,11 @@ def resample_polyline_by_distance(
             direction_baseline=0.0,
             fallback=fallback,
             min_extrapolation_displacement=min_extrapolation_displacement,
+            min_extrapolation_route_alignment_cosine=(
+                min_extrapolation_route_alignment_cosine
+            ),
+            trailing_candidate_alignment=None,
+            trailing_candidate_baseline=0.0,
         )
         return samples
 
@@ -97,6 +116,11 @@ def resample_polyline_by_distance(
             direction_baseline=0.0,
             fallback=fallback,
             min_extrapolation_displacement=min_extrapolation_displacement,
+            min_extrapolation_route_alignment_cosine=(
+                min_extrapolation_route_alignment_cosine
+            ),
+            trailing_candidate_alignment=None,
+            trailing_candidate_baseline=0.0,
         )
         return samples
 
@@ -106,11 +130,18 @@ def resample_polyline_by_distance(
     end_points = points[1:][valid]
     cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
     path_length = float(cumulative[-1])
-    direction, direction_source, direction_baseline = _stable_extrapolation_direction(
+    (
+        direction,
+        direction_source,
+        direction_baseline,
+        trailing_candidate_alignment,
+        trailing_candidate_baseline,
+    ) = _stable_extrapolation_direction(
         points,
         segments,
         fallback,
         min_extrapolation_displacement,
+        min_extrapolation_route_alignment_cosine,
     )
 
     samples = []
@@ -139,6 +170,11 @@ def resample_polyline_by_distance(
         direction_baseline=direction_baseline,
         fallback=fallback,
         min_extrapolation_displacement=min_extrapolation_displacement,
+        min_extrapolation_route_alignment_cosine=(
+            min_extrapolation_route_alignment_cosine
+        ),
+        trailing_candidate_alignment=trailing_candidate_alignment,
+        trailing_candidate_baseline=trailing_candidate_baseline,
     )
     return np.asarray(samples, dtype=np.float64)
 
@@ -159,10 +195,19 @@ def _stable_extrapolation_direction(
     segments: np.ndarray,
     fallback: np.ndarray,
     min_displacement: float,
-) -> tuple[np.ndarray, str, float]:
+    min_route_alignment_cosine: float,
+) -> tuple[np.ndarray, str, float, Optional[float], float]:
     if min_displacement <= 0:
         segment = segments[-1]
-        return normalize_direction(segment), "last_segment", float(np.linalg.norm(segment))
+        direction = normalize_direction(segment)
+        baseline = float(np.linalg.norm(segment))
+        return (
+            direction,
+            "last_segment",
+            baseline,
+            float(np.dot(direction, fallback)),
+            baseline,
+        )
 
     endpoint = points[-1]
     max_displacement = 0.0
@@ -171,8 +216,24 @@ def _stable_extrapolation_direction(
         displacement_norm = float(np.linalg.norm(displacement))
         max_displacement = max(max_displacement, displacement_norm)
         if displacement_norm >= min_displacement:
-            return normalize_direction(displacement), "trailing_displacement", displacement_norm
-    return fallback, "route_condition", max_displacement
+            direction = normalize_direction(displacement)
+            alignment = float(np.dot(direction, fallback))
+            if alignment >= min_route_alignment_cosine:
+                return (
+                    direction,
+                    "trailing_displacement",
+                    displacement_norm,
+                    alignment,
+                    displacement_norm,
+                )
+            return (
+                fallback,
+                "route_condition_alignment_guard",
+                displacement_norm,
+                alignment,
+                displacement_norm,
+            )
+    return fallback, "route_condition", max_displacement, None, 0.0
 
 
 def _update_diagnostics(
@@ -187,6 +248,9 @@ def _update_diagnostics(
     direction_baseline: float,
     fallback: np.ndarray,
     min_extrapolation_displacement: float,
+    min_extrapolation_route_alignment_cosine: float,
+    trailing_candidate_alignment: Optional[float],
+    trailing_candidate_baseline: float,
 ) -> None:
     if diagnostics is None:
         return
@@ -209,6 +273,17 @@ def _update_diagnostics(
             "fallback_direction": fallback.tolist(),
             "min_extrapolation_displacement_meters": float(
                 min_extrapolation_displacement
+            ),
+            "min_extrapolation_route_alignment_cosine": float(
+                min_extrapolation_route_alignment_cosine
+            ),
+            "extrapolation_trailing_candidate_alignment": (
+                None
+                if trailing_candidate_alignment is None
+                else float(trailing_candidate_alignment)
+            ),
+            "extrapolation_trailing_candidate_baseline_meters": float(
+                trailing_candidate_baseline
             ),
             "extrapolation_fallback_alignment": float(np.dot(direction, fallback)),
         }

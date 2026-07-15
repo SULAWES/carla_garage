@@ -338,6 +338,18 @@ def build_event_outputs(
                 "after_direction_baseline_meters": after_resampling[
                     "extrapolation_direction_baseline_meters"
                 ],
+                "before_trailing_candidate_alignment": before_resampling.get(
+                    "extrapolation_trailing_candidate_alignment"
+                ),
+                "after_trailing_candidate_alignment": after_resampling.get(
+                    "extrapolation_trailing_candidate_alignment"
+                ),
+                "before_trailing_candidate_baseline_meters": before_resampling.get(
+                    "extrapolation_trailing_candidate_baseline_meters", 0.0
+                ),
+                "after_trailing_candidate_baseline_meters": after_resampling.get(
+                    "extrapolation_trailing_candidate_baseline_meters", 0.0
+                ),
                 "before_observed_path_length_meters": before_resampling[
                     "observed_path_length_meters"
                 ],

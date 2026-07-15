@@ -96,6 +96,14 @@ Bench2Drive mini smoke 中的 `10x2` target 默认不再是 fixed-time future eg
 - manifest header 和 `training_config.json` 均包含 `arc_length_stable_extrapolation_v2`、`0.5m` extrapolation baseline 和 `0.001m` 去重阈值。
 - 旧 spatial manifest 缺少新 contract 时会明确报错，不会静默进入训练。
 
+2026-07-16 `arc_length_route_aligned_extrapolation_v3` 上线后重新完成：
+
+- `14` 个 `test_diffusiondrive_*.py` 单测通过；新增覆盖反向 trailing candidate fallback，以及禁止跨过回弹段寻找更老 baseline。
+- B2D mini manifest 构建/`--verify-load` 通过，header 包含 v3 schema、`0.5m` displacement threshold 和 `0.0` route-alignment cosine。
+- v2 manifest 会以 `outdated spatial target contract` 明确拒绝。
+- B2D mini 原生传感器 1-step CPU 训练、checkpoint 保存和 `training_config.json` v3 contract 落盘通过。
+- 使用实际 v3 resampler 重算 v2 全量门控留下的 19 条 trace，`>12m` 从 19 降到 7；剩余 7 条 route-condition delta 均为 `35m...250m`。
+
 ## 常用环境变量
 
 ```bash
