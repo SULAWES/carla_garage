@@ -529,4 +529,36 @@ L0 的完整 20-route 中 route `50` 没有生成 result JSON；`bench2drive_50_
 
 剩余 19 条 trace 中，11 条来自 `InterurbanAdvancedActorFlow`；多数事件伴随速度和 observed future path length 急降，且 v2 选择的 trailing displacement 与 route fallback 反向或近乎正交，cosine 最低为 `-0.94`。这说明 `0.5m` displacement 门槛能消除量化抖动，但仍会接受碰撞后回弹/横移作为长距离外推方向。
 
-当前代码已升级为 `arc_length_route_aligned_extrapolation_v3`：最近达到 `0.5m` 的 trailing displacement 还必须满足 route-alignment cosine `>=0`；候选反向时立即 fallback，不跨过回弹段寻找更老的位移。对 19 条 trace 使用实际 v3 resampler 重算将 `>12m` 降到 7 条；剩余事件全部伴随 `35m...250m` route-condition delta。下一步必须通过调度作业重建 v3 配对 manifest 并复核实际全量统计，之后再构建无 scenario cap 的 v3 train/val manifest 并 full retrain。route 24/50/139/153 多 attempt 闭环也仍待运行。
+当前代码已升级为 `arc_length_route_aligned_extrapolation_v3`：最近达到 `0.5m` 的 trailing displacement 还必须满足 route-alignment cosine `>=0`；候选反向时立即 fallback，不跨过回弹段寻找更老的位移。实际 `39,432` 样本 capped 配对门控已完成，sample key/order 和全部 condition/speed/brake invariants 零差异；`>12m` 从 v2 的 `19` 降到 `7`，`>5m` 从 `1,162` 降到 `1,151`，没有新阈值越界。19 个变化 transition 中 18 个下降，唯一增加仅 `0.53m` 且未越过 `5m`。
+
+剩余 7 条 `>12m` 全部伴随 `35m...250m` route-condition delta；其中 4 条来自同一 `ParkingCrossingPedestrian` route 的 condition 正负号切换，另外 3 条伴随明显速度/command 阶段变化。低速且 condition 稳定的 `>12m` 为 0。低速稳定 `>5m` 仍有 30 条，最大 `9.28m`、median `6.22m`，分布在 29 条 route，不再表现为单一外推 bug。
+
+### Spatial target v3 正式训练全集门控（2026-07-16）
+
+无 scenario cap 的正式 soft-clean train manifest 已构建完成，共 `113,008` 样本、`5,304` routes、`107,704` 个 transition。相对旧正式 train manifest，sample key set/order 完全一致，duplicate/missing/extra 为 0，command/speed/route condition/target speed/brake/class/valid/twohot 等 invariant mismatch 为空。匹配的 NSJ-left validation manifest 含 `1,024` 样本、`946` transitions，同样通过 key/invariant 检查。
+
+train endpoint jump `>12m` 从旧版 `269` 降到 v3 `10`，低速且 condition 稳定的事件从 `238` 降到 `0`；`>5m` 从 `2,916` 降到 `2,650`，低速稳定事件从 `379` 降到 `80`。validation 为 `>12m=0`、`>5m=62`，无低速稳定事件。新旧直接比较中，v3 对 `>12m` 解决 266 条、新增 7 条、保留 3 条；新增事件均伴随至少 `17.5m` route-condition 变化。4 条是同一 Parking route 的 condition 正负号翻转，2 条是 Interurban future path 急缩且 trailing-route cosine 仅 `0.338/0.040`，另 1 条伴随 `57.4m` condition 变化。
+
+`>5m` 新增 154 条，其中 67 条低速稳定、最大 `9.90m`。这些记录都表现为 route-condition fallback 与偏离 condition `20...51` 度的 trailing direction 在相邻采样间切换，是当前硬阈值留下的中等 source flicker；占全部 transition `0.062%`，且没有进入低速稳定 `>12m` 灾难区。综合严重跳变下降 `96.3%`、低速稳定严重跳变清零和 v4 未验证的语义风险，正式 v3 门控通过。下一步用该 train/validation manifest full retrain，训练后再用尾部误差决定是否需要连续混合或 route-augmented polyline。route 24/50/139/153 多 attempt 闭环也仍待运行。
+
+### Spatial target v3 full retrain（2026-07-17）
+
+正式 v3 target 的 condition-v1 full retrain 已完成：
+
+```text
+run=/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1/soft_clean_skip25_imgnet_v3target_ddp4_bs64x4_lr6e-4_ep100
+train_manifest=/share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25_stable_v3.jsonl
+val_manifest=/share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25_stable_v3.jsonl
+epochs=100
+steps=44200
+batch_size=64 per GPU
+global_batch_size=256
+num_workers=12 per rank
+prefetch_factor=2
+```
+
+训练完整生成 epoch 0...99 checkpoint 和 `latest.pth`，日志中没有 OOM、DataLoader worker kill、NaN、traceback 或中断。此前怀疑的主机内存缓慢增长没有在本次配置下复现，因此 `--num-workers 12 --prefetch-factor 2` 可保留为该 4 卡训练环境的已验证配置；仍不启用 persistent workers。
+
+NSJ-left validation 最低 loss/trajectory 出现在 epoch 97：`loss=3.2979`、`trajectory_unweighted=0.2573`。epoch 99 为 `3.3249/0.2595`，差距仅 `0.8%`；最后十个 epoch 均值为 `loss=3.4007`、`trajectory_unweighted=0.2658`、`target_speed_loss=0.2103`。旧 condition-v1 对应最后十 epoch 均值为 `4.3437/0.3440/0.2160`，表面下降约 `21.7%/22.7%/2.6%`。
+
+该 validation target 已由旧外推规则切换为 v3，因此上述下降首先证明标签更平滑、训练更容易拟合，不能单独证明闭环或同标签开环性能提升。正式 checkpoint 先使用 `latest.pth`，避免根据带随机训练噪声的单次 validation 最小值挑选；epoch 97 只作为 secondary checkpoint。下一步让旧 condition-v1 `latest.pth` 和新 v3 `latest.pth` 在同一 v3 eval manifest、相同 fixed/seeded diffusion noise 下配对，才能分离 target 变化与重训收益。

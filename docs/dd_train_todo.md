@@ -148,7 +148,11 @@
   - [x] 实现 `arc_length_stable_extrapolation_v2`：外推使用至少 `0.5m` trailing displacement，不足时使用 route condition；旧 manifest schema 明确失效
   - [x] 完成 `39,432` 样本 v2 配对门控：key/order 和 condition/speed/brake 不变量零差异，`>12m` jump 从 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`
   - [x] 实现 `arc_length_route_aligned_extrapolation_v3`：可靠 trailing displacement 还必须与 route condition cosine `>=0`；19 条剩余 trace 的本地反事实重算将 `>12m` 降到 7，且剩余事件 route-condition delta 均 `>=35m`
-  - [ ] 通过调度作业重建 full soft-clean v3 配对 manifest，确认实际全量 `>12m` 结果与反事实一致，再构建无 scenario cap 的正式训练/验证 manifest
+  - [x] 完成 `39,432` 样本 v3 capped 配对门控：`>12m=7`、`>5m=1,151`，没有新阈值越界，低速且 condition 稳定的 `>12m` 为 0；剩余 7 条的 condition delta 为 `35m...250m`
+  - [x] 构建无 scenario cap 的正式 v3 train manifest 并完成全量门控：`113,008` 样本、`5,304` routes、`107,704` transitions，key/order 与全部 invariant 零差异；`>12m 269 -> 10`、低速稳定 `>12m 238 -> 0`，`>5m 2,916 -> 2,650`、低速稳定 `>5m 379 -> 80`
+  - [x] 构建匹配 `--balanced-scenarios --val-max-samples 1024` 的 v3 `NonSignalizedJunctionLeftTurn` validation manifest：`946` transitions，`>12m=0`、`>5m=62`，无低速稳定事件
+  - [x] 用正式 v3 train/val manifest 完成 4 卡 full retrain：`100 epochs / 44,200 steps`，`--num-workers 12 --prefetch-factor 2` 全程无 OOM、worker kill、NaN 或 traceback；run 为 `soft_clean_skip25_imgnet_v3target_ddp4_bs64x4_lr6e-4_ep100`
+  - [ ] 让旧 condition-v1 与新 v3 checkpoint 在同一 v3 eval manifest、同一确定性 diffusion noise 下做配对开环；之后检查旧版 `L1>1m` route 和 80 条低速稳定中等跳变附近的尾部误差
   - [ ] 做模型侧 LiDAR channel ablation：above-only、below-only、all-zero、original，确认负贡献来自哪个通道或整体 distribution gap
   - [ ] 在确定性推理、target 连续性和 channel/temporal 归因后，评估 LiDAR fusion gate / dropout full retrain，避免把多个问题混入一次训练
   - [ ] 补 `agent_states / agent_labels / bev_semantic_map` auxiliary supervision，让 LiDAR 分支学习可解释的近场几何 / 动态体语义，而不是只靠 trajectory loss 间接学习

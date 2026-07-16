@@ -157,5 +157,5 @@ anchor 估计语义：
 2. 当前 closed-loop Bench2Drive 220 只有 `DS=44.81`、`RC=79.48`、`NDS=35.52`，说明仅靠 B2D Full open-loop 轨迹误差不能保证闭环表现。
 3. condition-v1 full retrain、C2/L1 20-route、配对开环和第一批 online contract 统计均已完成。当前不能继续把问题简化为“LiDAR 负贡献”。
 4. fixed seed 0-4 all-scenarios 开环已完成，确认推理随机性是次级尾部因素；重点 route 多 attempt 闭环仍待完成。
-5. v2 full manifest 已将 target endpoint jump `>12m` 从 `119` 降到 `19`，但剩余 trace 暴露碰撞后反向/横向 trailing displacement。当前 `arc_length_route_aligned_extrapolation_v3` 要求外推方向与 route condition cosine `>=0`；下一步通过调度作业重建 v3 manifest，门控通过后再 full retrain。
+5. `arc_length_route_aligned_extrapolation_v3` 的正式训练全集门控已通过：`113,008` 样本 key/order 与条件标签严格一致，`107,704` 个 transition 中 `>12m` 从旧版 `269` 降到 `10`，低速且 condition 稳定的 `>12m` 从 `238` 降到 `0`。`>5m` 从 `2,916` 降到 `2,650`；仍有 80 条低速稳定中等跳变，作为 full retrain 后的尾部监控项，不再继续叠加未经训练验证的新 target 启发式。
 6. 完成以上归因后，再比较 half-scan temporal 方案和 above/below channel；只有稳定收益出现后才进入 fusion gate/dropout 或 auxiliary-supervision full retrain。

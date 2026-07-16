@@ -96,6 +96,26 @@ load_file=""
 
 这组结果说明 full baseline-basic 在开环轨迹误差上很强，但闭环仍是弱 baseline，后续持续学习或控制改进需要以闭环 failure modes 为主要诊断对象。
 
+## Completed V3-Target Condition Run
+
+正式 `arc_length_route_aligned_extrapolation_v3` train/validation manifest 的 condition-v1 full retrain 已完成：
+
+```text
+logdir=/share/home/u19666033/ltr/dd_logs/full_baseline_condition_v1
+id=soft_clean_skip25_imgnet_v3target_ddp4_bs64x4_lr6e-4_ep100
+train_manifest=/share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25_stable_v3.jsonl
+val_manifest=/share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25_stable_v3.jsonl
+epochs=100
+steps=44200
+batch_size=64 per GPU
+global_batch_size=256
+num_workers=12 per rank
+prefetch_factor=2
+persistent_workers=false
+```
+
+该 run 全程无 OOM、worker kill、NaN 或 traceback。validation 最低 trajectory loss 出现在 epoch 97，`trajectory_unweighted=0.2573`；epoch 99 为 `0.2595`，因此正式评测先使用 `latest.pth`，epoch 97 只作 secondary。由于新旧 validation target contract 不同，不能直接把 loss 下降解释为模型性能提升；应在同一 v3 eval manifest 和相同确定性 diffusion noise 下比较旧、新 checkpoint。
+
 ### 20-route closed-loop ablations
 
 baseline-basic 后续已完成一组 20-route 闭环 A/B，用于初步定位控制侧 failure modes。结果归档在：
@@ -350,7 +370,9 @@ conda run -n ltr_garage_2 python team_code/train_diffusiondrive.py \
 - 最近达到 `0.5m` 的可靠尾部位移一旦反向，就立即使用 route condition，不跨过回弹段寻找更老的位移；整个窗口没有 `0.5m` 位移时同样 fallback。route-condition 优先级为 command world point、`target_point`、`target_point_next`、ego forward。
 - `0.001m` 以下的相邻重复点仍会在弧长重采样前去除。
 
-v2 先修复了低速停驻时 pose 量化抖动导致的反向长距离外推。全量 `39,432` 样本配对门控中，样本 key/order、condition/speed/brake 等不变量完全一致；endpoint jump `>12m` 从 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`。剩余事件显示，可靠 baseline 仍可能来自碰撞后的反向/横向位移。v3 增加 route-alignment guard；对这 19 条 trace 做本地反事实重算后，`>12m` 降到 7 条，剩余事件全部伴随 `35m...250m` route-condition 变化。
+v2 先修复了低速停驻时 pose 量化抖动导致的反向长距离外推。`39,432` 样本 capped 配对门控中，样本 key/order、condition/speed/brake 等不变量完全一致；endpoint jump `>12m` 从旧版 `119` 降到 v2 `19`、v3 `7`，`>5m` 从 `1,271` 降到 `1,162`、`1,151`。v3 没有新增阈值越界，低速且 condition 稳定的 `>12m` 为 0；剩余 7 条全部伴随 `35m...250m` route-condition 变化。该 capped manifest 只用于设计门控，正式训练前仍需对无 scenario cap 的 train manifest 复核相同指标。
+
+正式无 scenario cap 的 train manifest 门控也已完成：`113,008` 样本、`107,704` transitions，key/order 和全部 condition/speed/brake invariant 零差异；`>12m` 从旧版 `269` 降到 `10`，低速稳定 `>12m` 从 `238` 降到 `0`；`>5m` 从 `2,916` 降到 `2,650`，低速稳定 `>5m` 从 `379` 降到 `80`。匹配的 `1,024` 样本 NSJ-left validation 为 `>12m=0`、`>5m=62`，无低速稳定事件。正式 v3 可用于 full retrain；80 条低速稳定中等跳变保留为训练后尾部监控项。
 
 target contract 会写入 `training_config.json` 和 manifest header 的 `spatial_target` 字段。当前 loader 要求 v3 schema、`0.5m` displacement 和 `0.0` route-alignment cosine 完全匹配；旧版和 v2 manifest 都会被明确拒绝。不要覆盖旧缓存，应使用带 `stable_v3` 后缀的新路径重建，以保留旧实验的可追溯性。
 
@@ -376,6 +398,7 @@ python tools/build_diffusiondrive_manifest.py \
   --output-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_eval_soft_clean_1024ps_fs5_skip25_spatial_stable_v3.jsonl \
   --frame-sampling 5 \
   --skip-first-frames 25 \
+  --target-mode spatial_path \
   --balanced-scenarios \
   --max-samples-per-scenario 1024 \
   --quality-filter soft_clean \
@@ -472,10 +495,24 @@ python tools/build_diffusiondrive_manifest.py \
   --output-manifest /share/home/u19666033/ltr/dd_cache/nsj_left_val_fs5_spatial_skip25_stable_v3.jsonl \
   --frame-sampling 5 \
   --skip-first-frames 25 \
+  --target-mode spatial_path \
   --max-samples 1024 \
+  --balanced-scenarios \
   --num-workers 16 \
   --rebuild \
   --verify-load
+```
+
+正式 train manifest 构建后还要相对上一轮同分布 manifest 做训练全集门控；`39,432` capped 结果不能替代该检查：
+
+```bash
+python tools/inspect_diffusiondrive_spatial_target_continuity.py \
+  --sample-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25_stable_v3.jsonl \
+  --reference-manifest /share/home/u19666033/ltr/dd_cache/full_condition_v1_train_soft_clean_fs5_skip25_spatial.jsonl \
+  --output-dir /share/home/u19666033/ltr/dd_logs/lidar_diagnostics/spatial_target_v3_train_full \
+  --event-threshold 12 \
+  --max-events 300 \
+  --num-workers 32
 ```
 
 `--num-workers` 是 CPU 多进程数，只用于并行读取 annotation 和构造 trajectory target / route condition / speed labels；不要把它和训练 DataLoader 的 `--num-workers` 混淆。预构建 manifest 时的 `root-dir / route-glob / frame-sampling / skip-first-frames / target-mode / spatial target 参数与 schema / balanced-scenarios / max-samples-per-scenario` 必须和后续 GPU 训练保持一致。当前 condition-v1 loader 要求 manifest header 和每条 record 都包含 `target_speed_label` 与 `route_condition_feature`；spatial target 还要求当前 `spatial_target` contract。旧 manifest 不再静默 fallback 到逐样本读取 annotation，应换路径重建。

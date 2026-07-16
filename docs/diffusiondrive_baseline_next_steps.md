@@ -632,7 +632,7 @@ C2_A9_pid_7_3_fallback:
 
 `arc_length_stable_extrapolation_v2` 已完成全量 `39,432` 样本配对门控：样本 key/order、condition/speed/brake 不变量零差异，endpoint jump `>12m` 从 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`。剩余 19 条 trace 中，多数可靠 trailing displacement 与 route direction 反向或近乎正交，主要集中在急减速/碰撞后的短 future path。
 
-因此新增 `arc_length_route_aligned_extrapolation_v3`：至少 `0.5m` 的最近 trailing displacement 还必须与 route-condition fallback cosine `>=0`；候选反向时立即 fallback，不跨过回弹段寻找更老的位移。对 19 条 trace 使用实际 v3 resampler 重算后，`>12m` 降到 7，剩余 7 条全部伴随 `35m...250m` route-condition 变化。当前顺序是：调度作业重建并验证 v3 配对 manifest -> 构建无 scenario cap 的 v3 train/val manifest -> 用 v3 target full retrain -> online half-scan temporal/channel ablation -> fusion gate/dropout/auxiliary supervision。重点 route fixed-seed 多 attempt 与前两步并行，用于量化 CARLA 方差。
+因此新增 `arc_length_route_aligned_extrapolation_v3`：至少 `0.5m` 的最近 trailing displacement 还必须与 route-condition fallback cosine `>=0`；候选反向时立即 fallback，不跨过回弹段寻找更老的位移。正式无 cap train manifest 含 `113,008` 样本和 `107,704` 个 transition，key/order 与条件标签严格一致；`>12m` 从旧版 `269` 降到 `10`，低速稳定 `>12m` 从 `238` 降到 `0`，`>5m` 从 `2,916` 降到 `2,650`。剩余 80 条低速稳定中等跳变作为训练后监控项，不再为时间平滑直接叠加未经训练验证的 v4 启发式。当前顺序是：用正式 v3 target full retrain -> online half-scan temporal/channel ablation -> fusion gate/dropout/auxiliary supervision。重点 route fixed-seed 多 attempt 与 full retrain 并行，用于量化 CARLA 方差。
 
 ### 什么时候它会变成高优先级
 
@@ -843,8 +843,8 @@ notes:
 
 ## 当前推荐优先级
 
-1. v2 full soft-clean 配对门控已完成；下一步用调度作业重建 `arc_length_route_aligned_extrapolation_v3` 配对 manifest，确认实际全量 `>12m` jump 只剩可由大幅 route-condition 切换解释的事件。
-2. 门控通过后构建无 scenario cap 的 v3 train/val manifest 并 full retrain；同时对 route 24/50/139/153 做 fixed seed 多 attempt 闭环，继续量化 CARLA 环境方差。
+1. v3 正式 target full retrain 已完成；下一步让旧 condition-v1 和新 v3 checkpoint 在同一 v3 eval manifest、同一确定性 noise 下做配对开环，并复核旧 `L1>1m` routes 与剩余 target jump 附近的尾部误差。
+2. 配对开环通过后先跑 route 00/24 sanity 和固定 20-route spatial-PID fallback；同时对 route 24/50/139/153 做 fixed seed 多 attempt，继续量化 CARLA 环境方差。
 3. 随后做 online half-scan temporal 与 above/below channel ablation；优先验证前向上一 tick 动态点云是否导致交互场景退化。
 4. 只有归因稳定后再做 conservative LiDAR fusion gate、受控 dropout 和 BEV/agent auxiliary supervision full retrain；no/zero-LiDAR 只保留为诊断上界。
 5. 新版 speed-head 仍先跑 route 00/24 sanity；不要与上述 LiDAR 归因实验同时改变纵向控制器。

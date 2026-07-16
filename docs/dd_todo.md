@@ -72,7 +72,10 @@
   - [x] 实现低速停驻段 `arc_length_stable_extrapolation_v2`，避免窗口末端毫米级反向位移触发长距离外推
   - [x] 完成 full soft-clean v2 配对门控：样本和条件标签严格一致，`>12m` jump 从 `119` 降到 `19`；剩余异常暴露碰撞后反向 trailing displacement
   - [x] 增加 v3 route-alignment guard；剩余 19 条 trace 的本地反事实中只保留 7 条 `>12m`，且均伴随大幅 route-condition 切换
-  - [ ] 用调度作业重建并验证 v3 manifest，通过后再启动保留 LiDAR 的 full retrain
+  - [x] 完成 v3 capped manifest 实际门控：`39,432` 样本和条件标签严格一致，`>12m=7`，没有新阈值越界
+  - [x] 构建并验证无 scenario cap 的正式 train/val v3 manifest：train `113,008` 样本、validation `1,024` 样本，key/order 与条件标签严格一致；train `>12m` 从 `269` 降到 `10`，低速稳定 `>12m` 从 `238` 降到 `0`
+  - [x] 使用正式 v3 train/val manifest 完成保留 LiDAR、SpeedHead 和 route-condition token 的 4 卡 full retrain；`100 epochs / 44,200 steps` 全程稳定
+  - [ ] 在同一 v3 eval manifest 和确定性 noise 下配对评估旧/新 checkpoint；重点复核 80 条低速稳定 `5m...9.90m` 中等跳变附近的开环尾部，不先为它们增加 v4 启发式
   - [ ] 增加模型侧 LiDAR channel ablation：above / below / all-zero / original，定位是地面通道、障碍通道还是整体 BEV contract 有害
   - [ ] 在随机性、target 连续性和 temporal/channel 归因完成后评估 LiDAR fusion gate / dropout，保留 LiDAR 输入并降低未校准分支的早期污染
   - [ ] 若继续出现负贡献，优先补 `bev_semantic_map`、`agent_states`、`agent_labels` 等辅助监督，而不是把 zero-LiDAR 当正式方案

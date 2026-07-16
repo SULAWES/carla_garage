@@ -64,7 +64,15 @@ target jump `>12m` 后一帧的 original mean L1 达到 `1.52m`。另有 `170` �
 
 2026-07-16 已完成 v2 全量 `39,432` 样本配对门控。样本 key/order 完全一致，duplicate/missing/extra 和 condition/speed/brake 等 invariant mismatch 均为 0；`>12m` jump 从旧版 `119` 降到 `19`，`>5m` 从 `1,271` 降到 `1,162`。剩余 19 条中有 11 条来自 `InterurbanAdvancedActorFlow`，多伴随车速和 future path length 急降；trace 显示 trailing displacement 与 route fallback cosine 最低到 `-0.94`。
 
-因此 contract 继续升级为 `arc_length_route_aligned_extrapolation_v3`：可靠 trailing displacement 除了至少 `0.5m`，还必须与 route fallback cosine `>=0`。只对需要外推的方向选择增加 guard，不修改已观测路径内的弧长插值。对上述 19 条 trace 本地反事实重算后，`>12m` 降到 7 条；剩余 7 条全部伴随 `35m...250m` route-condition delta。v3 full manifest 仍需通过调度作业重建并做实际全量复核。
+因此 contract 继续升级为 `arc_length_route_aligned_extrapolation_v3`：可靠 trailing displacement 除了至少 `0.5m`，还必须与 route fallback cosine `>=0`。只对需要外推的方向选择增加 guard，不修改已观测路径内的弧长插值。实际 `39,432` 样本 capped manifest 与 trace replay 一致：`>12m=7`、`>5m=1,151`；相对 v2 分别解决 12/11 条，未新增任何 `>12m` 或 `>5m` transition。19 条受影响 transition 中 18 条下降，唯一一次增加为 `0.53m` 且没有越过 `5m`。
+
+剩余 7 条 `>12m` 中，4 条来自同一 `ParkingCrossingPedestrian` route 的 route-condition 正负号切换，condition delta 约 `250m`；另外 3 条伴随 `35m/57m/97m` condition 变化和明显速度/command 阶段变化。低速且 condition 稳定的 `>12m` 为 0。仍有 30 条低速稳定的 `5m...9.28m` jump，分布在 29 条 route，median `6.22m`，不再呈现单一外推 bug，但训练后仍应在尾部误差中监控。
+
+正式无 scenario cap 的 soft-clean train/validation manifest 随后完成。train 含 `113,008` 样本、`5,304` routes 和 `107,704` 个 transition；相对旧正式 manifest，sample key/order、duplicate/missing/extra 和全部 condition/speed/brake invariant 均严格一致。endpoint jump `>12m` 从 `269` 降到 `10`，其中低速且 condition 稳定的事件从 `238` 降到 `0`；`>5m` 从 `2,916` 降到 `2,650`，低速稳定事件从 `379` 降到 `80`。NSJ-left validation 含 `1,024` 样本、`946` transitions，`>12m=0`、`>5m=62`，无低速稳定事件。
+
+train 的直接新旧交集显示，`>12m` 解决 266 条、新增 7 条、保留 3 条；新增 7 条均有 `17.5m...249.8m` condition 变化。4 条来自同一 Parking route 的 condition 正负号翻转；2 条 Interurban trace 的 future path 从 `11.30m` 骤降至 `1.53m/0.07m`，所选 trailing displacement 与 route cosine 仅 `0.338/0.040`；另 1 条伴随 `57.4m` condition 变化。没有新增低速稳定 `>12m`。
+
+`>5m` 则解决 420 条、新增 154 条、保留 2,496 条。新增中有 67 条低速稳定事件，最大 `9.90m`；逐记录比较显示它们都发生在一帧使用 route-condition fallback、相邻帧继续使用与 condition 相差约 `20...51` 度的 trailing direction 时。这是 `0.5m` 硬切换留下的中等幅度 source flicker，但只占全部 transition 的 `0.062%`，且不再进入已知 `>12m` 灾难区。当前接受 v3 作为 full retrain contract；先用训练后的尾部误差判断是否值得引入 route-augmented polyline 或连续混合，避免仅为追求时间平滑而抹掉合法转弯标签。
 
 同时，`TrajectoryHead.forward_test()` 历史行为会在每次 forward 从新的 `torch.randn()` 开始扩散去噪。zero-LiDAR 的预测显著更平滑，既可能来自模态被置零后模型退化为稳定先验，也可能包含随机初始噪声触发 mode switching 的影响，因此补做了 5-seed 配对诊断。
 
@@ -120,7 +128,7 @@ route 167/185 的本次 contract run 与原 C2 结果相比已不再出现相同
 
 ## 下一步顺序
 
-1. **重建并验证 spatial target。** v2 全量门控已完成并暴露反向 trailing displacement；下一步通过调度作业新建 v3 full soft-clean 配对 manifest，重新统计 `>5m/>12m` jump，并确认剩余事件均由大幅 route-condition 切换解释。
+1. **使用正式 v3 manifest full retrain。** train/validation 构建和训练全集门控已通过；训练后复核旧 `L1>1m` routes、10 条剩余严重跳变和 80 条低速稳定中等跳变附近的开环尾部。
 2. **完成重点 route 方差诊断。** 5-seed all-scenarios 开环已完成；route 24/50/139/153 的 fixed seed 多 attempt 闭环仍待跑，用于区分模型 seed 与 CARLA 环境方差。
 3. **再做 online temporal LiDAR 诊断。** 优先比较当前 half-scan concat、仅当前 half、对动态区域降权等方案；同时做 above/below channel ablation。
 4. **最后进入训练结构改造。** 用 v3 target full retrain 后评估 conservative fusion gate、受控 modality dropout 和 BEV/agent auxiliary supervision。此时再决定是否需要 density alignment 或新 LiDAR backbone。
